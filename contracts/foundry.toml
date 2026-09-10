@@ -1,0 +1,24 @@
+[profile.default]
+src = "src"
+out = "out"
+test = "test"
+libs = ["lib"]
+solc = "0.8.24"
+
+# Recourse uses no transient storage, no blobs, and no Cancun-only opcodes, so
+# targeting paris keeps the bytecode deployable on every Base environment.
+evm_version = "paris"
+
+optimizer = true
+optimizer_runs = 200
+
+# The escrow is the artifact that matters; a size regression here is a warning
+# worth failing on rather than discovering at deploy time.
+[fmt]
+line_length = 110
+tab_width = 4
+bracket_spacing = false
+int_types = "long"
+
+[fuzz]
+runs = 512

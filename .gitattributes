@@ -1,0 +1,19 @@
+# Normalise to LF in the repository regardless of the platform that commits.
+# Without this, a Windows checkout rewrites every shell script and YAML file
+# with CRLF, and CI (Linux) then fails on files that look fine locally.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+
+# Windows-only helpers keep their CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Lockfiles are generated; collapse them in diffs and do not export them.
+package-lock.json -diff linguist-generated

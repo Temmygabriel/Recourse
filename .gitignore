@@ -1,0 +1,39 @@
+# --- secrets: never commit -------------------------------------------------
+.secrets/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- node ------------------------------------------------------------------
+node_modules/
+.pnpm-store/
+npm-debug.log*
+yarn-error.log*
+.pnp.*
+.next/
+out/
+.turbo/
+.vercel/
+*.tsbuildinfo
+next-env.d.ts
+
+# --- solidity / foundry ----------------------------------------------------
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+contracts/lib/
+
+# --- genlayer --------------------------------------------------------------
+.genlayer/
+genlayer-artifacts/
+
+# --- os / editor -----------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
