@@ -515,8 +515,16 @@ contract RecourseEscrow {
      *      12. criteriaMetBitmap out of range       -> garbage bits
      *      13. RELEASE with an unmet criterion      -> incoherent verdict
      *      14. PARTIAL_REFUND with all criteria met -> incoherent verdict
-     *      15. signature not from the relayer       -> the only gate on who may
-     *                                                  submit at all
+     *      15. caller is not the relayer            -> two independent gates on
+     *      16. signature not from the relayer          who may settle at all
+     *
+     *      On 15 and 16 together: a valid signature alone would make settlement
+     *      permissionless, which is a defensible meta-transaction design but
+     *      means a decision the relayer signed and then thought better of can be
+     *      pushed by anyone who saw it. Requiring the caller to be the relayer
+     *      as well costs one comparison and removes that question entirely.
+     *      Neither gate can change *what* a decision says — only whether it can
+     *      be delivered.
      */
     function settle(SettlementDecision calldata d, bytes calldata signature)
         external
@@ -537,7 +545,8 @@ contract RecourseEscrow {
 
         _checkVerdictCoherence(d, p.criteriaCount); // 11, 12, 13, 14
 
-        require(_recover(_hashDecision(d), signature) == relayer, "bad relayer signature"); // 15
+        require(msg.sender == relayer, "not relayer"); // 15
+        require(_recover(_hashDecision(d), signature) == relayer, "bad relayer signature"); // 16
 
         // --- effects before interactions ---
         p.stage = Stage.SETTLED;

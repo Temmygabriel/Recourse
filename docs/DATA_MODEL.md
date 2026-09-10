@@ -65,45 +65,55 @@ relayer from settling against evidence the chain never saw.
 
 ## 4. Purchase — state machine
 
+Stage names here are the ones the contract actually declares (`RecourseEscrow.Stage`).
+Earlier drafts of this document used `CREATED → REVIEW_WINDOW`; those names do
+not exist in the shipped code.
+
 ```
-                 createOffer()
-                      │
-                      ▼
-                 ┌─────────┐
-                 │ CREATED │◄──── purchase() by buyer, USDC escrowed
-                 └────┬────┘
-                      │ submitDelivery() by seller, before deliveryDeadline
-                      ▼
+                 createOffer()                       cancelOffer() (seller,
+                      │                              while still OPEN)
+                      ▼                                     │
+                 ┌──────┐  ◄──────────────────────────────┘  ┌──────┐
+                 │ OPEN │ ─────────────────────────────────► │ NONE │
+                 └───┬──┘                                    └──────┘
+                     │ purchase() by buyer, price escrowed
+                     ▼
+                 ┌────────┐
+                 │ FUNDED │ ──── claimDeadlineRefund() ────► SETTLED
+                 └───┬────┘      (buyer; seller never
+                     │            delivered, deadline passed)
+                     │ submitDelivery() by seller, before deliveryDeadline
+                     ▼
                  ┌───────────┐
                  │ DELIVERED │◄──── review window opens (deliveredAt + reviewWindow)
                  └─────┬─────┘
-          ┌────────────┼──────────────┬─────────────────────┐
-          │            │              │                     │
-   accept()│    openDispute()  claimReviewTimeout()  claimDeadlineRefund()
-   (buyer)  │     (buyer+bond)      (seller, after        (buyer, seller never
-          │            │            window expires)        delivered, deadline passed)
-          ▼            ▼                    ▼                     ▼
-      ┌─────────┐  ┌──────────┐        ┌─────────┐          ┌─────────┐
-      │ SETTLED │  │ DISPUTED │        │ SETTLED │          │ SETTLED │
-      └─────────┘  └────┬─────┘        └─────────┘          └─────────┘
-                        │ settle(decision) — relayer only,
-                        │ requires FINALIZED + unused nonce
-                        ▼
-                   ┌─────────┐
-                   │ SETTLED │
-                   └─────────┘
+        ┌──────────────┼───────────────────────┐
+        │              │                       │
+ acceptDelivery()  openDispute()      claimReviewTimeout()
+   (buyer)        (buyer + bond)      (anyone, after the
+        │              │               window closes)
+        ▼              ▼                       ▼
+    ┌─────────┐  ┌──────────┐            ┌─────────┐
+    │ SETTLED │  │ DISPUTED │            │ SETTLED │
+    └─────────┘  └────┬─────┘            └─────────┘
+                      │ settle(decision) — relayer only, requires
+                      │ finalized + an unused nonce + a coherent verdict
+                      ▼
+                 ┌─────────┐
+                 │ SETTLED │
+                 └─────────┘
 ```
 
 `SETTLED` is terminal. There is no path out of it, and no admin function that
-can produce a payout outside the `settle()` path. The only admin power is
-`pause()`, which stops new purchases and new settlements but **cannot move,
-redirect, or release funds**.
+can produce a payout outside the `settle()` path. The only admin powers are
+`pause()`, `unpause()`, `setRelayer()`, and `transferOwnership()`; none can
+move, redirect, or release funds. `test_OwnerHasNoPathToFunds` pins that claim.
 
 ### Review window arithmetic
 
 - `deliveryDeadline` — absolute unix seconds, set at offer creation, ≥ now + 1h.
 - `reviewWindow` — duration in seconds, set at offer creation, 1h–30 days.
-- Window closes at `deliveredAt + reviewWindow`. `accept()` and
+- Window closes at `deliveredAt + reviewWindow`. `acceptDelivery()` and
   `openDispute()` are both valid until then.
 - After the window closes, **only** `claimReviewTimeout()` (releases to seller)
   is valid. The buyer can no longer dispute — the deadline is procedural, and
@@ -121,24 +131,34 @@ who cannot deliver in time loses the sale; nobody has to argue about quality.
 
 ```solidity
 struct Purchase {
-    uint256 id;
-    address seller;
-    address buyer;              // address(0) until purchased
-    uint96  price;              // USDC, 6 decimals
-    uint64  deliveryDeadline;   // unix seconds
-    uint64  reviewWindow;       // seconds
-    uint64  deliveredAt;        // 0 until delivered
-    uint8   criteriaCount;      // 2..4
-    Stage   stage;
-    bytes32 promiseHash;
-    bytes32 rubricHash;
-    bytes32 deliveryHash;       // set at submitDelivery
-    bytes32 disputeHash;        // set at openDispute
-    uint8   disputedBitmap;     // bit i set => criterion i disputed
-    uint96  disputeBond;        // USDC, 6 decimals
-    bool    nonceConsumed;      // one settlement, ever
+    address  seller;
+    address  buyer;              // address(0) until purchased
+    uint96   price;              // USDC, 6 decimals
+    uint64   deliveryDeadline;   // unix seconds
+    uint64   reviewWindow;       // seconds
+    uint64   deliveredAt;        // 0 until delivered
+    uint8    criteriaCount;      // 2..4
+    Stage    stage;
+    uint96   disputeBond;        // USDC, 6 decimals
+    uint8    disputedBitmap;     // bit i set => criterion i disputed
+    string   promiseText;        // stored in full
+    string[] rubric;             // 2..4 items, stored in full
+    string   deliveryNotes;
+    string   disputeNotes;
 }
 ```
+
+`id` is not a field — it is the key of the `mapping(uint256 => Purchase)`. There
+is no stored `nonceConsumed` either: the replay guard is the global
+`mapping(uint256 => bool) nonceUsed`, which is stricter than a per-purchase flag
+(it also stops one nonce being spent on two different purchases).
+
+**The hashes are not stored; they are derived.** `promiseHash(id)`,
+`rubricHash(id)`, `deliveryHash(id)`, `disputeHash(id)`, and `evidenceRoot(id)`
+are views that recompute from the text above. This is design rule 1 in the
+contract header: a caller that supplies both text and hash can desync the two,
+so the contract accepts only text and derives the hash itself. It is also why
+the frontend contains no hashing code.
 
 `disputedBitmap` is a bitfield, not a list: it cannot be mutated after the
 dispute is opened, and it carries no free text. The buyer selects criteria by

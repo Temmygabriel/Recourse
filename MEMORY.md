@@ -27,7 +27,7 @@ the promise was kept; Base moves the money.
 | Constraint | Detail |
 |:--|:--|
 | **Local machine** | 8 GB RAM, no significant compute. **Never run `npm install`, `next build`, `forge build`, or any other heavy job locally.** All heavy compute happens on GitHub Actions or Vercel. |
-| **Local toolchain** | Node v24.14.0, npm 11.9.0, git 2.53.0. **No `gh` CLI, no `winget`, no Vercel CLI, no SSH keys, no git credential store.** |
+| **Local toolchain** | Node v24.14.0, npm 11.9.0, git 2.53.0. **No `gh` on `PATH`** — it is installed at `C:\Users\USER\AppData\Local\gh-install\bin\gh.exe`; call it by full path or prepend that directory to `PATH`. **No `winget`.** No Vercel CLI, no SSH keys, no git credential store. |
 | **Deployment** | Vercel, connected via the Vercel dashboard to the GitHub repo (not the CLI). Vercel runs install+build in its own cloud. |
 | **Chain** | Base **Sepolia** testnet only. No mainnet, no real funds, ever, in this build. |
 | **GenLayer** | Consensus **v0.6** / Studio **v0.123** release family. See below. |
@@ -47,6 +47,8 @@ the promise was kept; Base moves the money.
 | D7 | **An offer is a single-slot purchase record, not a stock item** | Matches the inspection-record metaphor. No marketplace browsing (explicitly out of scope). |
 | D8 | **Wallet connect is `viem` + `window.ethereum` directly — no wagmi, no RainbowKit** | Keeps the frontend dependency tree tiny so Vercel builds are fast and a version-churn bug can't sink the demo. |
 | D9 | **The relayer is a standalone Node process, not a Vercel function** | Vercel serverless can't hold the long-lived watcher GenLayer finality needs. |
+| D10 | **`settle()` requires *both* `msg.sender == relayer` *and* a valid relayer signature** | Build spec §4.7 says only the relayer signature can call settlement; §4.1 says verify the relayer's message. Requiring both satisfies either reading and costs one comparison. A signature-only gate would make settlement permissionless — defensible as meta-transaction relaying, but it means a decision the relayer signed and then reconsidered can be pushed by anyone who saw it. Neither gate can change *what* a decision says, only whether it can be delivered. |
+| D11 | **`src/` has zero Solidity dependencies; `forge-std` is installed by CI, not committed** | `contracts/lib/` is gitignored and the escrow imports nothing external, so a clean clone builds with no submodules. Only the test suite needs `forge-std`, so CI runs `forge install foundry-rs/forge-std --no-commit` before `forge test`. |
 
 ---
 
@@ -133,4 +135,8 @@ docs/        DATA_MODEL.md, SECURITY.md, DEPLOY.md
   decided late.
 - Whether a GenLayer contract deploy requires a fee on the target network (the
   migration doc says detect gaslessness from the estimate, not the name).
-- GitHub push is not yet wired up — no `gh` CLI is installed on this machine.
+- **Blocked on the user:** the GitHub token lacks the `workflow` scope, so
+  `.github/workflows/ci.yml` cannot be pushed until they run
+  `gh auth refresh -s workflow`. CI is the only place the Solidity and GenVM
+  code actually compiles, so nothing is verified until this is done. The current
+  workflow file exists only in the working tree.
