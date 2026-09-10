@@ -23,7 +23,6 @@ import {
   parseUnits,
   type Address,
   type PublicClient,
-  type WalletClient,
 } from 'viem';
 import { baseSepolia } from 'viem/chains';
 
@@ -194,7 +193,26 @@ async function ensureChain(provider: Eip1193Provider): Promise<void> {
   }
 }
 
-export function walletClient(account: Address): WalletClient {
+/**
+ * A wallet client bound to `account` on Base Sepolia.
+ *
+ * **The return type is deliberately inferred, not annotated `: WalletClient`.**
+ * Do not "tidy" it back to the bare alias. The bare `WalletClient` defaults its
+ * generics to `chain = Chain | undefined` and `account = Account | undefined`,
+ * and viem's `IsUndefined<T> = [undefined] extends [T] ? true : false` evaluates
+ * that union as TRUE. That flips `GetChainParameter` from its optional branch
+ * (`{ chain?: ... }`) to its required one (`{ chain: ... }`), so every
+ * `writeContract` on the result demands an explicit `chain` and fails to
+ * typecheck with "Property 'chain' is missing" — which is exactly how this
+ * broke the first Vercel build, reported against a call site in escrow.ts that
+ * was itself correct.
+ *
+ * Letting TypeScript infer the return type keeps the concrete `typeof
+ * baseSepolia` and `Address` in the signature, so `chain` and `account` are
+ * already bound and the per-call parameters stay optional. A future caller
+ * gets a client it can just use.
+ */
+export function walletClient(account: Address) {
   const provider = injected();
   if (provider === null) {
     throw new WalletError('No wallet found in this browser.');

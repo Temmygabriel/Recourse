@@ -148,7 +148,7 @@ blocker **without ever looking**, and it was wrong:
 |:--|:--|:--|
 | Deployer | 0.02 | 20.00 |
 | Relayer | 0.001 | 20.00 |
-| Demo | 0 | 0 |
+| Demo | 0.01 | 20.00 |
 
 Two things worth not re-deriving:
 
@@ -160,9 +160,12 @@ Two things worth not re-deriving:
 - **0.001 ETH is not a small number here.** Base Sepolia gas is cheap enough
   that this is hundreds of `settle()` transactions. Gas is not the binding
   constraint on this build; USDC and time are.
-- **The demo wallet has no ETH**, so it cannot sign anything yet. It needs gas
-  before the demo, and USDC as well if it plays the buyer (the buyer pays the
-  price plus the bond; the seller pays nothing but gas).
+
+All three wallets are now funded, so **no faucet request is outstanding.** The
+demo wallet's 0.01 ETH is its gas ceiling: it is the wallet a human clicks
+through the demo with, so a rehearsal that runs long can drain it. If a demo run
+starts failing on gas, that is the wallet to top up, not the deployer.
+
 
 ### Known non-secret addresses
 
