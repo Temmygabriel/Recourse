@@ -28,6 +28,10 @@ contracts/lib/
 # --- genlayer --------------------------------------------------------------
 .genlayer/
 genlayer-artifacts/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
 
 # --- os / editor -----------------------------------------------------------
 .DS_Store

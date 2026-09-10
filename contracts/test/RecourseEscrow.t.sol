@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {RecourseEscrow} from "../src/RecourseEscrow.sol";
 import {IERC20} from "../src/interfaces/IERC20.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
+import {HashVectors} from "./HashVectors.generated.sol";
 
 /// @notice The escrow is the only thing standing between a relayer bug and
 ///         someone's money, so the attack paths are first-class cases here, not
@@ -1494,6 +1495,94 @@ contract RecourseEscrowTest is Test {
         _offer();
         _offer();
         assertEq(escrow.purchaseCount(), 2);
+    }
+
+    // =====================================================================
+    // Cross-language hash vectors
+    // =====================================================================
+
+    /// @dev The escrow and the GenLayer judgment contract are the only two
+    ///      implementations of these hashes, and they run in different languages
+    ///      on different chains. Nothing inside either can detect that the other
+    ///      started trimming whitespace: this contract would stay internally
+    ///      consistent while every dispute became unjudgeable.
+    ///
+    ///      So the vectors in docs/vectors/hash-vectors.json are the contract
+    ///      between the two — and every case in them is one where a
+    ///      well-meaning cleanup would change the bytes.
+    function test_HashVectors_PromiseHashMatchesSharedVectors() public {
+        HashVectors.StringVector[] memory vectors = HashVectors.stringVectors();
+        assertGt(vectors.length, 0, "generator produced no vectors");
+
+        for (uint256 i = 0; i < vectors.length; i++) {
+            vm.prank(seller);
+            uint256 id = escrow.createOffer(
+                PRICE,
+                uint64(block.timestamp) + DELIVERY_OFFSET,
+                REVIEW_WINDOW,
+                vectors[i].text,
+                _rubric()
+            );
+            assertEq(escrow.promiseHash(id), vectors[i].digest, vectors[i].name);
+        }
+    }
+
+    function test_HashVectors_NotesHashMatchesSharedVectors() public {
+        HashVectors.StringVector[] memory vectors = HashVectors.stringVectors();
+
+        for (uint256 i = 0; i < vectors.length; i++) {
+            uint256 id = _funded();
+
+            vm.prank(seller);
+            escrow.submitDelivery(id, vectors[i].text);
+            assertEq(escrow.deliveryHash(id), vectors[i].digest, vectors[i].name);
+
+            vm.prank(buyer);
+            escrow.openDispute(id, 0b001, vectors[i].text);
+            assertEq(escrow.disputeHash(id), vectors[i].digest, vectors[i].name);
+        }
+    }
+
+    function test_HashVectors_RubricHashMatchesSharedVectors() public {
+        HashVectors.RubricVector[] memory vectors = HashVectors.rubricVectors();
+        assertGt(vectors.length, 0, "generator produced no vectors");
+
+        for (uint256 i = 0; i < vectors.length; i++) {
+            vm.prank(seller);
+            uint256 id = escrow.createOffer(
+                PRICE,
+                uint64(block.timestamp) + DELIVERY_OFFSET,
+                REVIEW_WINDOW,
+                PROMISE,
+                vectors[i].rubric
+            );
+            assertEq(escrow.rubricHash(id), vectors[i].digest, vectors[i].name);
+        }
+    }
+
+    /// @dev The counterexample, stated as a test: if this contract normalised
+    ///      before hashing, these would be equal. They must not be.
+    function test_HashVectors_WhitespaceIsSignificant() public {
+        HashVectors.StringVector[] memory vectors = HashVectors.stringVectors();
+
+        uint256 trailingNewline = type(uint256).max;
+        uint256 padded = type(uint256).max;
+        for (uint256 i = 0; i < vectors.length; i++) {
+            bytes32 nameHash = keccak256(bytes(vectors[i].name));
+            if (nameHash == keccak256("promise_trailing_newline")) trailingNewline = i;
+            if (nameHash == keccak256("promise_leading_and_trailing_spaces")) padded = i;
+        }
+        assertTrue(trailingNewline != type(uint256).max, "vector missing");
+        assertTrue(padded != type(uint256).max, "vector missing");
+
+        assertTrue(
+            vectors[trailingNewline].digest != sha256(bytes("Deliver three illustrations.")),
+            "a trailing newline must change the hash"
+        );
+        assertTrue(
+            vectors[padded].digest != sha256(bytes("Deliver three illustrations.")),
+            "leading and trailing spaces must change the hash"
+        );
     }
 
     // =====================================================================

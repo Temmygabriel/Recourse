@@ -28,6 +28,13 @@ Four properties this file exists to guarantee:
     checked against the commitment carried in the same package. This is a
     *consistency* check, not an authority check — see the note below.
 
+    HASHING IS OVER VERBATIM BYTES. The escrow commits
+    `sha256(bytes(stored_text))` on the string exactly as written, with no
+    trimming or normalisation, so this contract must hash the identical bytes.
+    Stripping a trailing newline before hashing would fail the check and leave a
+    real dispute permanently unjudgeable. Text is cleaned for the prompt only,
+    after the hash check has already passed.
+
 4.  NO SINGLE PARTY CHOOSES THE ANSWER. Leader and validators each run the
     judgment independently; a validator accepts only an exactly matching
     outcome, with latitude on the discretionary partial-refund percentage
@@ -88,6 +95,14 @@ def _norm_hash(value) -> str:
     return str(value).strip().lower().removeprefix("0x")
 
 
+def _clean(text: str) -> str:
+    """Trim a text field for *display in the prompt only*.
+
+    Never apply this before hashing — see the note in `_require_str`.
+    """
+    return text.strip()
+
+
 def _rubric_hash(rubric: list) -> str:
     """sha256 of the rubric items joined by a single newline, in list order.
 
@@ -143,7 +158,11 @@ def _clamp(raw, criteria_count: int) -> dict:
           to justify taking money from the seller.
       PARTIAL_REFUND, none met       -> FULL_REFUND. Every criterion failed;
           that is not a partial outcome.
-      PARTIAL_REFUND, some unmet     -> PARTIAL_REFUND, bps clamped to 1..9999.
+      PARTIAL_REFUND, some unmet     -> PARTIAL_REFUND. If the model supplied a
+          usable percentage it is clamped to 1..9999; if it supplied none, the
+          share is derived from its own criteria list. Clamping a missing number
+          up to 1bp would refund a hundredth of a percent on a promise that was
+          demonstrably broken, which is worse than either neighbouring row.
       FULL_REFUND, all met           -> UNDETERMINED. Same reason as above.
       FULL_REFUND, some unmet        -> FULL_REFUND.
       anything unrecognised          -> UNDETERMINED.
@@ -171,7 +190,9 @@ def _clamp(raw, criteria_count: int) -> dict:
     if outcome not in VALID_OUTCOMES:
         outcome = "UNDETERMINED"
 
-    refund_bps = _as_int(raw.get("refund_bps"), 0)
+    # -1, not 0, so "the model supplied no usable number" is distinguishable
+    # from "the model supplied a number that happens to be zero".
+    refund_bps = _as_int(raw.get("refund_bps"), -1)
 
     if outcome == "RELEASE":
         if all_met:
@@ -193,6 +214,8 @@ def _clamp(raw, criteria_count: int) -> dict:
             outcome = "FULL_REFUND"
             refund_bps = 10_000
         else:
+            if refund_bps <= 0:
+                refund_bps = _proportional_refund(criteria_count, met_count)
             refund_bps = min(max(refund_bps, 1), 9_999)
     else:  # UNDETERMINED
         refund_bps = 0
@@ -238,6 +261,11 @@ class RecourseJudgment(gl.Contract):
         """
         package = json.loads(package_json)
 
+        # These are kept EXACTLY as they arrived and hashed that way. The escrow
+        # commits `sha256(bytes(stored_text))` verbatim, with no trimming, so a
+        # single trailing newline stripped here would make the hash check below
+        # fail and leave a genuine dispute permanently unjudgeable. Cleaning
+        # happens only when the text is placed into the prompt.
         promise_text = self._require_str(package, "promise_text", MAX_PROMISE_CHARS)
         delivery_notes = self._require_str(package, "delivery_notes", MAX_NOTES_CHARS)
         dispute_notes = self._require_str(package, "dispute_notes", MAX_NOTES_CHARS)
@@ -247,7 +275,7 @@ class RecourseJudgment(gl.Contract):
             raise gl.UserError("rubric must be a list")
         if not (MIN_CRITERIA <= len(rubric) <= MAX_CRITERIA):
             raise gl.UserError(f"rubric must have {MIN_CRITERIA}-{MAX_CRITERIA} items")
-        rubric = [self._clip(str(item), MAX_RUBRIC_ITEM_CHARS, "rubric item") for item in rubric]
+        rubric = [self._require_rubric_item(item, i) for i, item in enumerate(rubric)]
 
         # Internal consistency: each text field must hash to the commitment
         # carried alongside it. See the module docstring for what this does and
@@ -267,7 +295,11 @@ class RecourseJudgment(gl.Contract):
                 raise gl.UserError("disputed criterion out of range")
 
         prompt = self._build_prompt(
-            promise_text, rubric, disputed_indices, delivery_notes, dispute_notes
+            _clean(promise_text),
+            [_clean(item) for item in rubric],
+            disputed_indices,
+            _clean(delivery_notes),
+            _clean(dispute_notes),
         )
 
         # --- non-deterministic block: no state access, no side effects -------
@@ -334,24 +366,36 @@ class RecourseJudgment(gl.Contract):
     # -----------------------------------------------------------------------
 
     def _require_str(self, package: dict, key: str, max_len: int) -> str:
+        """Return the field verbatim, or raise.
+
+        Deliberately does NOT trim or truncate. The escrow already bounds and
+        validates this text at write time, so anything out of range here means
+        the package contains text the chain never saw — which is a reason to
+        reject, not to quietly repair. And any mutation of the returned string
+        before hashing would break the hash check by construction.
+        """
         value = package.get(key)
         if not isinstance(value, str):
             raise gl.UserError(f"{key} must be a string")
-        return self._clip(value, max_len, key)
+        if not value.strip():
+            raise gl.UserError(f"{key} is blank")
+        if len(value) > max_len:
+            raise gl.UserError(f"{key} exceeds {max_len} characters")
+        return value
 
-    def _clip(self, text: str, max_len: int, field: str) -> str:
-        """Trim, reject blank, hard-truncate over-length.
+    def _require_rubric_item(self, item, index: int) -> str:
+        """Same contract as `_require_str`, for one rubric item.
 
-        Truncation is cheap and visible here, unlike in the escrow where the
-        text is part of a hash commitment and must therefore revert instead.
-        The order matters: the escrow already rejected over-length text, so
-        arriving at the truncation branch means the package contains text the
-        chain never saw — and the hash check that follows catches that anyway.
+        The index is named in the error because a rubric is the one list here
+        where "which item" is the actionable part of the complaint.
         """
-        cleaned = text.strip()
-        if not cleaned:
-            raise gl.UserError(f"{field} is blank")
-        return cleaned[:max_len]
+        if not isinstance(item, str):
+            raise gl.UserError(f"rubric item {index} must be a string")
+        if not item.strip():
+            raise gl.UserError(f"rubric item {index} is blank")
+        if len(item) > MAX_RUBRIC_ITEM_CHARS:
+            raise gl.UserError(f"rubric item {index} exceeds {MAX_RUBRIC_ITEM_CHARS} characters")
+        return item
 
     def _require_hash_match(self, field: str, text: str, package: dict) -> None:
         """Reject unless sha256(text) equals the hash in the same package."""

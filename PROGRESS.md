@@ -14,7 +14,9 @@ Work log, newest first. For durable decisions and constraints see
 | Repo scaffold | 🟢 done |
 | Base escrow contract | 🟡 written, **unverified** (needs CI compile) |
 | Escrow tests | 🟡 written, **unverified** (needs CI run) |
-| GenLayer judgment contract | 🟡 written, **unverified** (needs `genvm-lint`) |
+| GenLayer judgment contract | 🟡 syntax-checked locally; **SDK surface unverified** (needs `genvm-lint`) |
+| Judgment logic tests | 🟢 **passing locally** (11/11) |
+| Cross-language hash vectors | 🟢 done and locked from both sides |
 | Relayer | 🔴 not started |
 | Frontend (7 screens) | 🔴 not started |
 | CI (GitHub Actions) | ⚠️ file written, **cannot push** — token lacks `workflow` scope |
@@ -24,10 +26,82 @@ Work log, newest first. For durable decisions and constraints see
 
 Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 
-> **Nothing in `contracts/` or `genlayer/` has ever been compiled.** Both are
-> written against the spec and read line-by-line, but this machine cannot run
-> `forge build` or `genvm-lint`, and CI cannot run until the `workflow` scope
-> is granted. Treat "written" as "not yet known to build" until CI is green.
+> **No Solidity in this repo has ever been compiled.** It is written against the
+> spec and read line-by-line, but this machine cannot run `forge build`, and CI
+> cannot run until the `workflow` scope is granted. Treat the escrow and its
+> tests as "not yet known to build". The Python side is better off: the
+> deterministic logic has been executed (see below), but the GenVM SDK surface
+> is still unverified.
+
+---
+
+## 2026-09-10 — Session 4
+
+### Done
+
+- **Found a real interop bug by reading the judgment contract against the
+  escrow.** The escrow commits `sha256(bytes(stored_text))` over the text
+  *verbatim*; the judgment contract was `.strip()`-ing its fields before hashing
+  them. A promise ending in a newline — which a textarea produces routinely —
+  would have failed the hash check, raising `UserError` on every attempt and
+  leaving that dispute **permanently unjudgeable**. Fixed: the contract now
+  hashes exactly what arrived and cleans text only for the prompt, after the
+  hash check has passed. `_clip` (which trimmed and truncated) was replaced by
+  `_require_str` / `_require_rubric_item`, which reject rather than repair.
+- **Built cross-language hash vectors** — `scripts/gen-hash-vectors.mjs` is the
+  single source; it emits `docs/vectors/hash-vectors.json` for the Python side
+  and `contracts/test/HashVectors.generated.sol` for the Solidity side. Every
+  vector is a case where normalising would change the bytes: trailing newlines,
+  leading/trailing spaces, interior tabs, a rubric item whose own text ends in a
+  space, and non-ASCII (accents and emoji, which also pins UTF-8 encoding
+  agreement). CI regenerates and `git diff --exit-code`s them so the two sides
+  cannot drift.
+- **Wrote `genlayer/tests/test_judgment_logic.py`** — runs the contract's real
+  deterministic code with a minimal SDK stub, no pytest, no network:
+  `python genlayer/tests/test_judgment_logic.py`. **All 11 pass.** Covers the
+  hash vectors, the verbatim-bytes regression, `_as_int`'s bool rejection, the
+  proportional-refund bounds, the full `_clamp` repair table — and an
+  **exhaustive property test**: every outcome × every criteria pattern (2–4
+  criteria) × a spread of refund percentages including out-of-range ones, with a
+  Python transcription of the escrow's `_checkVerdictCoherence` asserting the
+  escrow would accept every verdict `_clamp` can produce. The failure it guards
+  against is a settlement attempt burnt on a well-formed but rejected verdict.
+- **Added three Foundry tests against the same vectors**, exercising the real
+  code paths (`promiseHash`, `deliveryHash`, `disputeHash`, `rubricHash`) rather
+  than asserting `sha256` directly — plus one test stating the counterexample:
+  whitespace *must* change the hash.
+- **Corrected `docs/DATA_MODEL.md` §3**, which documented a `delivery_hash`
+  formula the contract does not implement and said nothing about the verbatim
+  invariant.
+
+### Caught and fixed
+
+- **`_clamp` refunded 0.01% for a broken promise.** When the model returned
+  `PARTIAL_REFUND` with unmet criteria but no usable `refund_bps`, the code
+  clamped the missing value up from 0 to 1 basis point — refunding a hundredth
+  of a percent on a promise that was demonstrably not kept, which is a worse
+  outcome than either neighbouring row of the repair table. Found by the repair
+  table test. Now: a missing or non-positive percentage is derived from the
+  model's own criteria list, the same treatment the `RELEASE` row already gives
+  a label that disagrees with its own `criteria_met`.
+  (`_as_int`'s default changed from `0` to `-1` so "supplied no number" is
+  distinguishable from "supplied zero".)
+- **`test_clamp_repair_table` had two duplicate rows** after an editing slip —
+  removed.
+
+### Blocked / needs the user
+
+- **`gh auth refresh -s workflow`** — re-verified this session, still
+  `Token scopes: 'gist', 'read:org', 'repo'`. This is the critical path: it is
+  the only thing standing between "written" and "known to build".
+  ```
+  gh auth refresh -s workflow        # gh is at C:\Users\USER\AppData\Local\gh-install\bin\
+  ```
+
+### Next
+
+1. Push once the `workflow` scope lands, and read the first CI run carefully.
+2. Relayer service (task #5).
 
 ---
 
