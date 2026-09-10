@@ -1,0 +1,20 @@
+{
+  // Typechecks the tests as well as the sources. The main tsconfig.json cannot
+  // do this: it sets `rootDir: "src"`, and adding `test/` would either move the
+  // emit root or drag the tests into `dist/`. This config emits nothing, so it
+  // can span both trees.
+  //
+  // CI runs both: `npm run typecheck` for the build's view of the world, and
+  // `npm run typecheck:tests` for this one.
+  //
+  // The test tree reaches outside the package — test/stubs/viem.ts imports
+  // keccak256 from ../../scripts/gen-wallet.mjs, deliberately, so that the hash
+  // assertions rest on the one Keccak-256 implementation in this repo that
+  // checks itself against published vectors. `scripts/gen-wallet.d.mts` types it.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".."
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

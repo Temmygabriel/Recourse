@@ -1,0 +1,38 @@
+{
+  // Two TypeScript flags here exist for one reason: the sources import each
+  // other with explicit `.ts` specifiers (`from './hashes.ts'`), and that is not
+  // a style choice. Node's built-in TypeScript support — which is how this
+  // relayer is tested and run on a machine that cannot `npm install` — does NOT
+  // map a `./x.js` specifier back to `./x.ts`. Verified, not assumed:
+  //
+  //     import { add } from './a.js'   -> ERR_MODULE_NOT_FOUND
+  //     import { add } from './a.ts'   -> works
+  //
+  // `allowImportingTsExtensions` lets tsc accept those specifiers, and
+  // `rewriteRelativeImportExtensions` rewrites them to `.js` on the way out, so
+  // the emitted `dist/` is ordinary ESM that imports `./x.js`. Both need
+  // TypeScript 5.7 or newer — see the devDependency in package.json, which is
+  // pinned to ^5.7.0 for exactly this reason. On 5.6 the build fails with
+  // "TS5097: An import path can only end with a '.ts' extension when
+  // 'allowImportingTsExtensions' is enabled", which is the symptom to look for.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src",
+    "outDir": "dist",
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "declaration": false,
+    "sourceMap": true
+  },
+  "include": ["src/**/*.ts"]
+}

@@ -1,0 +1,26 @@
+{
+  "name": "recourse-relayer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Watches GenLayer for a finalized verdict on a disputed purchase and delivers it to RecourseEscrow on Base Sepolia.",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.test.json",
+    "start": "node dist/index.js",
+    "start:ts": "node src/index.ts",
+    "test": "node --import ./test/register.mjs --test ./test/pure.test.ts"
+  },
+  "dependencies": {
+    "genlayer-js": "2.0.0-rc.1",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.7.0"
+  }
+}

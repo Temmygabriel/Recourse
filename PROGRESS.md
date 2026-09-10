@@ -17,7 +17,7 @@ Work log, newest first. For durable decisions and constraints see
 | GenLayer judgment contract | 🟡 syntax-checked locally; **SDK surface unverified** (needs `genvm-lint`) |
 | Judgment logic tests | 🟢 **passing locally** (11/11) |
 | Cross-language hash vectors | 🟢 done and locked from both sides |
-| Relayer | 🔴 not started |
+| Relayer | 🟢 written; **30/30 pure-logic tests passing locally**; SDK surface verified against the published package |
 | Frontend (7 screens) | 🔴 not started |
 | CI (GitHub Actions) | ⚠️ file written, **cannot push** — token lacks `workflow` scope |
 | README / security narrative | 🟡 partly written |
@@ -32,6 +32,93 @@ Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 > tests as "not yet known to build". The Python side is better off: the
 > deterministic logic has been executed (see below), but the GenVM SDK surface
 > is still unverified.
+>
+> **The relayer is verified where it can be.** Everything it does that does not
+> touch a chain — the commitment hashes, the verdict parser, the coherence check
+> that has to agree with Solidity, the nonce derivation, chain resolution, the
+> state store — runs locally with no dependencies and no network (30 tests). The
+> parts that do touch a chain are unverified until a deploy exists.
+
+---
+
+## 2026-09-10 — Session 5
+
+### Done
+
+- **Wrote the relayer end to end** — `relayer/` now contains the watcher that
+  carries a disputed purchase from Base Sepolia to Studio Devnet and the verdict
+  back. Ten source modules: `config`, `log`, `hashes`, `abi`, `escrow`,
+  `package`, `decision`, `genlayer`, `store`, `index`. Design notes are in
+  `relayer/README.md`; the load-bearing choices are that the nonce is derived as
+  `keccak256(genlayerTxHash, purchaseId)` so a retry is idempotent by
+  construction, that commitments are verified against the escrow's own views
+  *before* the GenLayer fee is spent, and that the decision is simulated against
+  the real escrow *before* it is signed.
+
+- **Found a way to test the relayer on this machine.** Node 24 runs TypeScript
+  directly, so with a module-resolution hook (`relayer/test/register.mjs`) and a
+  small `viem` stub, the chain-independent logic executes here with no `npm
+  install` — the same trick that worked for the Python contract. The stub's
+  keccak256 is imported from `scripts/gen-wallet.mjs`, which checks itself
+  against published digest and address vectors, so the hash assertions rest on
+  something outside this repo rather than on a second implementation that might
+  be wrong in the same way. **30/30 passing.**
+
+- **Verified the genlayer-js surface against the published package instead of
+  against the docs — and the docs were wrong.** Downloaded
+  `genlayer-js@2.0.0-rc.1` (`npm pack`, no install) and read its `dist/`. Two
+  findings that would each have cost a debugging session:
+  - The migration doc calls the preview chain **`studio-dev`**, but the package
+    exports **`studioDevnet`**. There is no hyphenated export.
+  - **`testnetAsimov` and `testnetBradbury` both declare `id: 4221`.** The old
+    id-based chain fallback would have returned whichever came first in key
+    order — a silent coin flip between two networks, surfacing much later as a
+    `sourceChainId` mismatch. `resolveChain` now refuses to resolve an ambiguous
+    id and says which names collided.
+  Also confirmed: `genlayer-js@2.0.0-rc.1` really is published (it resolved in
+  the lockfile), and every client method the relayer calls exists with the
+  signature assumed — `readContract`, `writeContract`, `waitForFinalization`,
+  `estimateTransactionFeesForWrite`, `getAppealCharge`, `appealTransaction`. The
+  enums are the exception: `TransactionStatus` / `ExecutionResult` /
+  `TransactionHashVariant` are runtime values only from `genlayer-js/types`, not
+  from the main entry, where importing them typechecks and then yields
+  `undefined`. The relayer duck-types and never imports them, so it was
+  unaffected.
+
+- **Generated `relayer/package-lock.json`** with `npm install --package-lock-only`
+  — metadata resolution only, no packages downloaded, cheap enough for this
+  machine. CI can now use `npm ci` and npm caching.
+
+### Caught and fixed
+
+- **A test of mine asserted something false about the rubric hash.** I had
+  written `assert.notEqual(rubricHashHex(['a','b']), rubricHashHex(['a\nb']))`.
+  They are equal — the preimage is the joined text, so `['a','b']` and
+  `['a\nb']` are the same bytes. Rather than delete the assertion, it is now an
+  explicit `assert.equal` documenting a **known limitation of the shared
+  commitment scheme**: a newline inside a rubric item is indistinguishable from
+  an item boundary. It is not exploitable here (the rubric array lives on-chain
+  and is set by the seller, and the relayer is trusted in this prototype), and
+  closing it would invalidate the locked vectors, so it is recorded rather than
+  changed. See the comment on that test.
+- **`tsconfig.json` could not accept the sources' `.ts` import specifiers.**
+  Node's type stripping does not map `./x.js` back to `./x.ts`, so every
+  relative import was rewritten to `.ts` — which then fails `tsc` unless
+  `allowImportingTsExtensions` and `rewriteRelativeImportExtensions` are on. Both
+  need TypeScript ≥ 5.7; the devDependency said `^5.6.0` and is now `^5.7.0`
+  (the lockfile resolves 5.9.3). CI also greps `dist/` for leftover `.ts`
+  specifiers, because if the rewrite silently did not apply, the build would
+  succeed and `npm start` would fail.
+
+### Blocked
+
+- **Still `gh auth refresh -s workflow`.** Third session running. `ci.yml` stays
+  local-only via `.git/info/exclude`; everything else is unaffected.
+
+### Next
+
+- Frontend (task #6): 7 screens, inspection-record theme.
+- Then the deploy runbook and README (task #8), then Vercel.
 
 ---
 

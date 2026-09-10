@@ -33,6 +33,14 @@ __pycache__/
 .venv/
 venv/
 
+# --- relayer ---------------------------------------------------------------
+dist/
+# Its bookkeeping, not its source. Committing this would make one machine's run
+# state look like part of the project, and a stale copy would tell a fresh clone
+# that purchases were already settled.
+.relayer-state.json
+.relayer-state.json.tmp
+
 # --- os / editor -----------------------------------------------------------
 .DS_Store
 Thumbs.db

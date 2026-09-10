@@ -20,6 +20,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const MASK64 = (1n << 64n) - 1n;
 
@@ -133,7 +134,7 @@ export function addressFromPrivateKey(privHex) {
 
 // --- self-test -------------------------------------------------------------
 
-const VECTORS = [
+export const VECTORS = [
   ['', 'c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470'],
   ['abc', '4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45'],
   [
@@ -149,13 +150,13 @@ const VECTORS = [
  * are about to fund is the difference between a working deployer and money
  * sent to a hole.
  */
-const ADDRESS_VECTORS = [
+export const ADDRESS_VECTORS = [
   ['0x0000000000000000000000000000000000000000000000000000000000000001', '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf'],
   ['0x0000000000000000000000000000000000000000000000000000000000000002', '0x2B5AD5c4795c026514f8317c7a215E218DcCD6cF'],
   ['0x4646464646464646464646464646464646464646464646464646464646464646', '0x9d8A62f656a8d1615C1294fd71e9CFb3E4855A4F'],
 ];
 
-function selfTest() {
+export function selfTest() {
   let ok = true;
 
   for (const [input, expected] of VECTORS) {
@@ -191,46 +192,58 @@ function selfTest() {
 }
 
 // --- main ------------------------------------------------------------------
+//
+// Guarded so this file can be imported for its keccak256/address helpers
+// without generating a keypair and printing an address as a side effect. The
+// relayer's test stubs import it exactly that way: `keccak256` here is verified
+// against published digest vectors by `--self-test`, which makes it the one
+// Keccak-256 in this repo that is known to be correct, and reusing it is
+// better than writing a second one that is merely believed to be correct.
+
+const isMain =
+  import.meta.main ?? process.argv[1] === fileURLToPath(import.meta.url);
 
 const args = process.argv.slice(2);
 const outIdx = args.indexOf('--out');
 
-if (args.includes('--self-test')) {
-  process.exit(selfTest() ? 0 : 1);
-}
+if (isMain) {
+  if (args.includes('--self-test')) {
+    process.exit(selfTest() ? 0 : 1);
+  }
 
-const privateKey = '0x' + crypto.randomBytes(32).toString('hex');
-const address = addressFromPrivateKey(privateKey);
+  const privateKey = '0x' + crypto.randomBytes(32).toString('hex');
+  const address = addressFromPrivateKey(privateKey);
 
-if (outIdx !== -1) {
-  const dir = path.resolve(args[outIdx + 1] ?? '.secrets');
-  fs.mkdirSync(dir, { recursive: true });
+  if (outIdx !== -1) {
+    const dir = path.resolve(args[outIdx + 1] ?? '.secrets');
+    fs.mkdirSync(dir, { recursive: true });
 
-  const write = (name, obj) => {
-    const p = path.join(dir, name);
-    if (fs.existsSync(p)) {
-      console.error(`refusing to overwrite existing ${p}`);
-      process.exit(1);
-    }
-    fs.writeFileSync(p, JSON.stringify(obj, null, 2) + '\n', { mode: 0o600 });
-    return p;
-  };
+    const write = (name, obj) => {
+      const p = path.join(dir, name);
+      if (fs.existsSync(p)) {
+        console.error(`refusing to overwrite existing ${p}`);
+        process.exit(1);
+      }
+      fs.writeFileSync(p, JSON.stringify(obj, null, 2) + '\n', { mode: 0o600 });
+      return p;
+    };
 
-  console.log('address                 ' + address);
-  console.log('deployer key written    ' + write('deployer.json', {
-    note: 'Recourse testnet deployer. Testnet only. Never reuse on mainnet.',
-    address,
-    privateKey,
-    createdAt: new Date().toISOString(),
-  }));
-  console.log('relayer key written     ' + write('relayer.json', {
-    note: 'Recourse relayer signer. Must match the escrow constructor relayer arg.',
-    address: addressFromPrivateKey(
-      '0x' + crypto.createHash('sha256').update('relayer' + privateKey).digest('hex'),
-    ),
-    privateKey: '0x' + crypto.createHash('sha256').update('relayer' + privateKey).digest('hex'),
-    createdAt: new Date().toISOString(),
-  }));
-} else {
-  console.log(address);
+    console.log('address                 ' + address);
+    console.log('deployer key written    ' + write('deployer.json', {
+      note: 'Recourse testnet deployer. Testnet only. Never reuse on mainnet.',
+      address,
+      privateKey,
+      createdAt: new Date().toISOString(),
+    }));
+    console.log('relayer key written     ' + write('relayer.json', {
+      note: 'Recourse relayer signer. Must match the escrow constructor relayer arg.',
+      address: addressFromPrivateKey(
+        '0x' + crypto.createHash('sha256').update('relayer' + privateKey).digest('hex'),
+      ),
+      privateKey: '0x' + crypto.createHash('sha256').update('relayer' + privateKey).digest('hex'),
+      createdAt: new Date().toISOString(),
+    }));
+  } else {
+    console.log(address);
+  }
 }
