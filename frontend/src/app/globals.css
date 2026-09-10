@@ -1,0 +1,402 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Recourse — the inspection-record theme.
+ *
+ * The visual reference is a customs form or a claims file, not a dashboard:
+ * light neutral paper, strong black type, hairline rules doing the work that
+ * shadows and rounded cards would otherwise do, and exactly one loud element
+ * per screen — the stamped disposition mark on the verdict.
+ *
+ * Everything below is a component class rather than a pile of utilities,
+ * because these are document primitives that recur across screens and should
+ * stay identical between them. Screen-specific layout stays in the JSX.
+ */
+
+@layer base {
+  html {
+    /* Nothing in this app should ever scroll sideways. */
+    overflow-x: hidden;
+  }
+
+  body {
+    @apply bg-paper text-ink font-sans antialiased;
+    /* A form is read top to bottom at a measure; it is not a full-bleed canvas. */
+    @apply text-[15px] leading-relaxed;
+  }
+
+  h1,
+  h2,
+  h3 {
+    @apply font-display text-ink;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  h1 {
+    @apply text-3xl;
+    line-height: 1.15;
+  }
+
+  h2 {
+    @apply text-xl;
+    line-height: 1.25;
+  }
+
+  h3 {
+    @apply text-base;
+  }
+
+  /*
+   * Monospace is reserved for genuine technical identifiers — a transaction
+   * hash, a purchase id, an address. Never for decoration or for "techy"
+   * flavour text.
+   */
+  code,
+  .ident {
+    @apply font-mono text-[12px] text-ink-muted;
+    word-break: break-all;
+  }
+
+  a {
+    @apply text-accent underline underline-offset-2;
+  }
+
+  /* Keyboard focus must stay visible; the default ring is invisible against
+     the warm paper background. */
+  :focus-visible {
+    outline: 2px solid theme('colors.accent');
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* --- Document structure ------------------------------------------------ */
+
+  /* The page sheet. A form is one column at a measure; wide screens get more
+     margin, not more columns. */
+  .sheet {
+    @apply mx-auto max-w-page px-4 sm:px-6;
+  }
+
+  /* A bordered document section. Sharp-ish corners, no shadow — the border is
+     the structure. Shadows are what make a form look like a SaaS card. */
+  .doc-card {
+    @apply border border-rule bg-surface rounded-card;
+  }
+
+  /* A section header inside a document: label on the left, value on the right,
+     hairline underneath. Like the field headers on a printed form. */
+  .doc-head {
+    @apply flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1
+           border-b border-rule px-4 py-3 sm:px-5;
+  }
+
+  .doc-head-title {
+    @apply font-display text-base font-semibold;
+  }
+
+  .doc-body {
+    @apply px-4 py-4 sm:px-5;
+  }
+
+  /* Hairline between two sections of the same document. */
+  .doc-rule {
+    @apply border-t border-rule;
+  }
+
+  /* A label/value row, as on a form. Stacks on narrow screens. */
+  .field {
+    @apply flex flex-col gap-1 py-2 sm:flex-row sm:items-baseline sm:gap-4;
+  }
+
+  .field-label {
+    @apply shrink-0 text-[13px] text-ink-muted sm:w-44;
+  }
+
+  .field-value {
+    @apply min-w-0 flex-1;
+  }
+
+  /* --- The promise: numbered requirements ------------------------------- */
+
+  /*
+   * Requirements are the load-bearing object of the whole product — the thing
+   * a dispute is argued against. They are numbered like clauses in a contract,
+   * not bulleted like a feature list, because the number is what the buyer
+   * cites when they dispute one and what the verdict cites when it reports one
+   * as unmet.
+   */
+  .req-list {
+    @apply divide-y divide-rule border-y border-rule;
+  }
+
+  .req {
+    @apply flex gap-3 py-3;
+  }
+
+  .req-num {
+    @apply mt-[2px] flex h-6 w-6 shrink-0 items-center justify-center rounded-full
+           border border-rule font-mono text-[11px] text-ink-muted;
+  }
+
+  .req-text {
+    @apply min-w-0 flex-1;
+  }
+
+  /* A requirement the verdict marked as not met. The left rule is the only
+     colour on the row; the text stays black so it is still readable when
+     printed or screenshotted into a demo video. */
+  .req-unmet {
+    @apply border-l-2 border-l-refund pl-3;
+  }
+
+  .req-met {
+    @apply border-l-2 border-l-release pl-3;
+  }
+
+  .req-disputed {
+    @apply bg-[#FBF7F4];
+  }
+
+  /* The buyer's tick, while choosing what to dispute. Same left rule as the
+     verdict's "not met", so the row a buyer ticks and the row the verdict
+     reports look like the same row — because on the settled screen they are. */
+  .req-selected {
+    @apply border-l-2 border-l-accent bg-accent/[0.04] pl-3;
+  }
+
+  .req-check {
+    @apply mt-[3px] h-4 w-4 shrink-0 cursor-pointer accent-accent;
+  }
+
+  .req-mark {
+    @apply mt-[2px] shrink-0 text-[12px] font-medium;
+  }
+
+  .req-met .req-mark {
+    @apply text-release;
+  }
+
+  .req-unmet .req-mark {
+    @apply text-refund;
+  }
+
+  /* --- Page furniture ---------------------------------------------------- */
+
+  /*
+   * The line under a page title that says what this screen is for. Design spec
+   * §4 asks each screen to lead with the purchase, so the title block stays
+   * small: name, one sentence, and the state chip. No hero, no illustration.
+   */
+  .page-head {
+    @apply mb-6 border-b border-rule pb-5;
+  }
+
+  .lede {
+    @apply mt-2 max-w-measure text-[14px] text-ink-muted;
+  }
+
+  /* --- The comparison, side by side -------------------------------------- */
+
+  /*
+   * The hero moment (design spec §5.6): what was promised on the left, what
+   * arrived on the right, same width, so a reader can check one against the
+   * other without scrolling or remembering. Collapses to one column on narrow
+   * screens, where side-by-side would be worse than useless.
+   */
+  .compare {
+    @apply grid gap-4 lg:grid-cols-2 lg:gap-0;
+  }
+
+  .compare-side {
+    @apply min-w-0;
+  }
+
+  /* The hairline between the two columns, which must not appear once stacked. */
+  .compare-side + .compare-side {
+    @apply lg:border-l lg:border-rule lg:pl-5;
+  }
+
+  /* The label above each column: "Promised", "Delivered". */
+  .compare-label {
+    @apply mb-2 text-[12px] font-medium uppercase tracking-wide text-ink-muted;
+  }
+
+  /* --- Evidence: exhibit items ------------------------------------------ */
+
+  /*
+   * Evidence is styled as exhibits attached to a file: labelled, attributed to
+   * a party, and quoted verbatim. Quoting verbatim matters beyond aesthetics —
+   * the escrow hashes these exact bytes, so the UI must never appear to
+   * paraphrase them.
+   */
+  .exhibit {
+    @apply border border-rule bg-surface rounded-card;
+  }
+
+  .exhibit-head {
+    @apply flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1
+           border-b border-rule px-3 py-2;
+  }
+
+  .exhibit-body {
+    @apply whitespace-pre-wrap break-words px-3 py-3 text-[14px];
+  }
+
+  /* The verbatim text must never be reformatted by the browser: no collapsing
+     of runs of spaces. If it looks different from the bytes that were hashed,
+     the whole commitment story stops being checkable by eye. */
+  .verbatim {
+    @apply whitespace-pre-wrap break-words font-sans;
+    tab-size: 2;
+  }
+
+  /* --- Status ------------------------------------------------------------ */
+
+  .status {
+    @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-control
+           border px-2 py-[3px] text-[12px] font-medium;
+  }
+
+  .status-pending {
+    @apply border-pending/40 bg-pending/[0.07] text-pending;
+  }
+
+  .status-release {
+    @apply border-release/40 bg-release/[0.07] text-release;
+  }
+
+  .status-partial {
+    @apply border-partial/40 bg-partial/[0.07] text-partial;
+  }
+
+  .status-refund {
+    @apply border-refund/40 bg-refund/[0.07] text-refund;
+  }
+
+  .status-neutral {
+    @apply border-rule bg-paper text-ink-muted;
+  }
+
+  /* --- Controls ---------------------------------------------------------- */
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-control border
+           px-4 py-2 text-[14px] font-medium transition-colors
+           disabled:cursor-not-allowed disabled:opacity-45;
+  }
+
+  .btn-primary {
+    @apply border-accent bg-accent text-white hover:bg-[#182E4C] hover:border-[#182E4C];
+  }
+
+  .btn-secondary {
+    @apply border-rule bg-surface text-ink hover:bg-paper;
+  }
+
+  .btn-danger {
+    @apply border-refund bg-surface text-refund hover:bg-refund/[0.06];
+  }
+
+  .input,
+  .textarea,
+  .select {
+    @apply w-full rounded-control border border-rule bg-surface px-3 py-2
+           text-[14px] text-ink placeholder:text-ink-muted/60;
+  }
+
+  .textarea {
+    @apply resize-y leading-relaxed;
+  }
+
+  .label {
+    @apply block text-[13px] font-medium text-ink;
+  }
+
+  .hint {
+    @apply text-[12px] text-ink-muted;
+  }
+
+  /* A checkbox row for picking which criterion failed. Big target, whole row
+     clickable — this is the one interaction the dispute flow depends on. */
+  .check-row {
+    @apply flex cursor-pointer items-start gap-3 border border-rule bg-surface
+           px-3 py-3 transition-colors hover:bg-paper;
+  }
+
+  .check-row-on {
+    @apply border-accent bg-accent/[0.04];
+  }
+
+  /* --- The stamped disposition mark ------------------------------------- */
+
+  /*
+   * The verdict mark. This is the one element in the app allowed to be loud,
+   * and the one deliberate use of uppercase: the entire reference is a rubber
+   * stamp on a form, and a stamp that reads "Partial refund" in mixed case
+   * does not read as a stamp. It is a single mark on a single screen, not a
+   * label applied to sections.
+   */
+  .stamp {
+    @apply inline-block border-[3px] px-5 py-2 font-display font-bold uppercase;
+    border-radius: 2px;
+    letter-spacing: 0.14em;
+    font-size: 1.05rem;
+    transform: rotate(-1.5deg);
+  }
+
+  .stamp-release {
+    @apply border-release text-release;
+    background: rgba(47, 107, 79, 0.05);
+  }
+
+  .stamp-partial {
+    @apply border-partial text-partial;
+    background: rgba(138, 90, 43, 0.05);
+  }
+
+  .stamp-refund {
+    @apply border-refund text-refund;
+    background: rgba(122, 59, 59, 0.05);
+  }
+
+  /* Named for the tone, matching `.status-neutral` above and `OutcomeInfo.tone`
+     in src/lib/status.ts — all three spellings of this outcome's colour agree.
+     It was previously `.stamp-undetermined`, which nothing ever applied, so an
+     UNDETERMINED verdict rendered its stamp with no border and no colour. */
+  .stamp-neutral {
+    @apply border-ink-muted text-ink-muted;
+    background: rgba(91, 91, 99, 0.05);
+  }
+
+  /* --- Money ------------------------------------------------------------- */
+
+  /*
+   * The settlement split. Tabular numerals so two figures line up when read
+   * against each other — the whole point of showing them side by side.
+   */
+  .amount {
+    @apply font-display text-2xl;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .money-row {
+    @apply flex items-baseline justify-between gap-4 py-2;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer utilities {
+  /* Visible only to screen readers. */
+  .sr-only-focusable:not(:focus):not(:focus-within) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
