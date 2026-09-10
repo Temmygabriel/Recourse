@@ -167,10 +167,25 @@ a real bug gets "fixed" by weakening an assertion.
   exists **only in the working tree** — it is excluded via `.git/info/exclude`,
   so it is not backed up in git. Until the scope is granted, CI cannot run and
   that file has no history.
-- **Faucet funds** for the demo: Base Sepolia ETH + USDC on the deployer
-  `0xe5Fe9119000C9E1113dc504891A83Da7bbaa7a7b`, and ETH on the relayer
-  `0x49B4f09C5894c1C90B0ca9099AF3De0Faf7f3037`.
-- **The user's demo/browser wallet address** — wanted as the demo seller.
+- ~~Faucet funds~~ — **checked, and I was wrong to have listed this.** The
+  deployer has 0.02 ETH and 20 USDC; the relayer has 0.001 ETH and (as of this
+  session) 20 USDC. Verified against two independent RPCs. An earlier session
+  recorded "needs faucet funds" as a blocker **without ever looking at the
+  chain**, and carried it forward for a day. Gas is not the binding constraint
+  on this build — the relayer's 0.001 ETH alone is hundreds of `settle()` calls.
+- **The demo wallet `0x0DE1…340D` has no ETH**, so it cannot sign yet. It needs
+  Base Sepolia gas before the demo, plus USDC if it plays the buyer.
+
+### Done after the two commits below
+
+- **Created the demo wallet** — `0x0DE10708F8c6DF7b73068d53def715A70C0f340D`,
+  key in `.secrets/demo.json` (gitignored, mode 0600, private key deliberately
+  never printed). Added `--out <dir> --wallet <name>` to `scripts/gen-wallet.mjs`
+  for a key that is a role of its own rather than part of the
+  deployer/relayer pair; it refuses to overwrite, so it cannot clobber the two
+  the escrow and relayer depend on. Self-test passed (7/7) before generating.
+- **Verified all Base Sepolia balances on-chain**, which is what caught the
+  stale blocker above.
 
 ### Next
 

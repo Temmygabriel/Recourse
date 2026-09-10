@@ -12,6 +12,9 @@
  * Usage:
  *   node scripts/gen-wallet.mjs                 # print a new address only
  *   node scripts/gen-wallet.mjs --out .secrets  # write JSON files into a dir
+ *   node scripts/gen-wallet.mjs --out .secrets --wallet demo
+ *                                               # one extra named keypair,
+ *                                               # e.g. the browser demo wallet
  *   node scripts/gen-wallet.mjs --self-test     # verify keccak against vectors
  *
  * NEVER commit the output. .secrets/ is gitignored; keep it that way.
@@ -205,10 +208,60 @@ const isMain =
 
 const args = process.argv.slice(2);
 const outIdx = args.indexOf('--out');
+const walletIdx = args.indexOf('--wallet');
 
 if (isMain) {
   if (args.includes('--self-test')) {
     process.exit(selfTest() ? 0 : 1);
+  }
+
+  // A single named wallet, for a role that is not part of the deployer/relayer
+  // pair — the browser wallet used in the demo, for instance. Kept separate
+  // from `--out`'s pair so that generating an extra wallet can never collide
+  // with the two the escrow and the relayer actually depend on.
+  if (walletIdx !== -1) {
+    const name = args[walletIdx + 1];
+    if (!name || name.startsWith('--')) {
+      console.error('--wallet needs a name, e.g. --wallet demo');
+      process.exit(1);
+    }
+    if (outIdx === -1) {
+      console.error('--wallet writes a key file, so it needs --out <dir>');
+      process.exit(1);
+    }
+
+    const dir = path.resolve(args[outIdx + 1] ?? '.secrets');
+    const file = path.join(dir, `${name}.json`);
+    if (fs.existsSync(file)) {
+      console.error(`refusing to overwrite existing ${file}`);
+      process.exit(1);
+    }
+
+    const privateKey = '0x' + crypto.randomBytes(32).toString('hex');
+    const address = addressFromPrivateKey(privateKey);
+
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      file,
+      JSON.stringify(
+        {
+          note: `Recourse ${name} wallet. Testnet only. Never reuse on mainnet.`,
+          address,
+          privateKey,
+          createdAt: new Date().toISOString(),
+        },
+        null,
+        2,
+      ) + '\n',
+      { mode: 0o600 },
+    );
+
+    // The address is public; the key is not printed. It goes to the file, which
+    // is gitignored and mode 0600 — printing it here would put a signing key
+    // into a terminal log and any transcript of this session.
+    console.log('address          ' + address);
+    console.log(`${name} wallet      ${file}  (private key inside — not printed)`);
+    process.exit(0);
   }
 
   const privateKey = '0x' + crypto.randomBytes(32).toString('hex');

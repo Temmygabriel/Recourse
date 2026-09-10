@@ -114,14 +114,22 @@ Verified 2026-09-10 by downloading the tarball and inspecting `dist/`. This is n
 
 ### Testnet keys — in `.secrets/`, gitignored, testnet only
 
-| Role | Address |
-|:--|:--|
-| Deployer | `0xe5Fe9119000C9E1113dc504891A83Da7bbaa7a7b` |
-| Relayer signer | `0x49B4f09C5894c1C90B0ca9099AF3De0Faf7f3037` |
+| Role | Address | File |
+|:--|:--|:--|
+| Deployer | `0xe5Fe9119000C9E1113dc504891A83Da7bbaa7a7b` | `.secrets/deployer.json` |
+| Relayer signer | `0x49B4f09C5894c1C90B0ca9099AF3De0Faf7f3037` | `.secrets/relayer.json` |
+| Demo (browser) | `0x0DE10708F8c6DF7b73068d53def715A70C0f340D` | `.secrets/demo.json` |
 
-The relayer address must be passed to the escrow constructor. Regenerate with
-`node scripts/gen-wallet.mjs --out .secrets` (refuses to overwrite existing
-files).
+The relayer address must be passed to the escrow constructor. Regenerate the
+deployer/relayer pair with `node scripts/gen-wallet.mjs --out .secrets`, or add
+one more independent key with `--out .secrets --wallet <name>`. Both refuse to
+overwrite existing files — including the `--wallet` form, which is why adding a
+wallet can never clobber the two the escrow and the relayer depend on.
+
+The demo wallet is the MetaMask account the browser signs with. **Its private
+key is deliberately not printed anywhere** — it is in `.secrets/demo.json`,
+which is gitignored and written mode 0600. Read it from the file to import into
+a wallet; do not paste it into a terminal or a transcript.
 
 > The key generator (`scripts/gen-wallet.mjs`) implements Keccak-256 and
 > secp256k1 address derivation from scratch on top of Node builtins. Its
@@ -129,6 +137,32 @@ files).
 > `node scripts/gen-wallet.mjs --self-test` before trusting any address it
 > prints.** A transposed rotation table in the Keccak permutation still
 > produces a plausible-looking address; it is simply the wrong one.
+
+### Base Sepolia balances — verified on-chain 2026-09-11
+
+Checked with `cast balance` / `balanceOf` against two independent RPCs (they
+agreed). Recorded because an earlier session carried "needs faucet funds" as a
+blocker **without ever looking**, and it was wrong:
+
+| Address | ETH | USDC |
+|:--|:--|:--|
+| Deployer | 0.02 | 20.00 |
+| Relayer | 0.001 | 20.00 |
+| Demo | 0 | 0 |
+
+Two things worth not re-deriving:
+
+- **The relayer does not need USDC.** It only ever calls `settle()`, which moves
+  money the escrow already holds and costs nothing but gas. The 20 USDC the user
+  put there is harmless but not used by any code path; if a later step seems to
+  want it, that is a sign the relayer is being asked to do something it should
+  not be doing.
+- **0.001 ETH is not a small number here.** Base Sepolia gas is cheap enough
+  that this is hundreds of `settle()` transactions. Gas is not the binding
+  constraint on this build; USDC and time are.
+- **The demo wallet has no ETH**, so it cannot sign anything yet. It needs gas
+  before the demo, and USDC as well if it plays the buyer (the buyer pays the
+  price plus the bond; the seller pays nothing but gas).
 
 ### Known non-secret addresses
 
@@ -217,5 +251,6 @@ docs/        DATA_MODEL.md, SECURITY.md, DEPLOY.md
   Vercel, the eight routes are reviewed by reading, not by a compiler. A
   read-only audit found no build-breaking defect and two real runtime ones (both
   now fixed), but an audit is not a compiler.
-- The user's demo/browser wallet address — wanted as the demo seller, so the
-  escrow has a second real address to show beside the deployer.
+- ~~The user's demo/browser wallet address~~ — **answered 2026-09-11.**
+  `0x0DE10708F8c6DF7b73068d53def715A70C0f340D`, key in `.secrets/demo.json`.
+  Still needs Base Sepolia ETH (it has none), and USDC if it plays the buyer.
