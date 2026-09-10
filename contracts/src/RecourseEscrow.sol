@@ -57,6 +57,16 @@ contract RecourseEscrow {
         UNDETERMINED // 3
     }
 
+    /// @notice The four amounts a settlement moves. Never returned from or
+    ///         accepted by an external function — it is a carrier for the
+    ///         internal split, and the external surface is the `Settled` event.
+    struct Payout {
+        uint256 toBuyer; // escrow refund
+        uint256 toSeller; // remainder of the price
+        uint256 bondToBuyer; // dispute bond, returned or forfeited
+        uint256 bondToSeller;
+    }
+
     struct Purchase {
         address seller;
         address buyer; // address(0) until purchased
@@ -321,7 +331,16 @@ contract RecourseEscrow {
         p.criteriaCount = uint8(rubric.length);
         p.stage = Stage.OPEN;
         p.promiseText = promiseText;
-        p.rubric = rubric;
+        // Element by element, not `p.rubric = rubric`. A `string[]` is an array
+        // of dynamic arrays, and the legacy code generator refuses to copy a
+        // nested calldata array into storage in one assignment — it fails with
+        // "Copying nested calldata dynamic arrays to storage is not
+        // implemented", which is a compile error rather than a wrong result.
+        // The loop is the documented workaround and is what the copy would have
+        // done anyway.
+        for (uint256 i = 0; i < rubric.length; i++) {
+            p.rubric.push(rubric[i]);
+        }
 
         emit OfferCreated(
             purchaseId,
@@ -552,34 +571,51 @@ contract RecourseEscrow {
         p.stage = Stage.SETTLED;
         nonceUsed[d.nonce] = true;
 
-        uint256 price_ = p.price;
-        uint256 bond = p.disputeBond;
-        uint256 refund = (price_ * d.refundBps) / BPS_DENOMINATOR;
-        uint256 toBuyer = refund;
-        uint256 toSeller = price_ - refund;
+        // Held in one memory slot rather than four stack slots. `Settled` takes
+        // eleven arguments, all of which are live at once when it is emitted;
+        // keeping the split in four separate locals on top of that is what
+        // pushed this function past the EVM's sixteen-slot reach.
+        Payout memory pay = _payout(p, d);
 
-        // Bond returns to the buyer unless the dispute was affirmatively
-        // rejected — i.e. RELEASE. An inconclusive UNDETERMINED is not bad
-        // faith and does not forfeit it. See docs/DATA_MODEL.md §6.
-        uint256 bondToBuyer = (d.outcome == Outcome.RELEASE) ? 0 : bond;
-        uint256 bondToSeller = bond - bondToBuyer;
-
-        _push(p.buyer, toBuyer + bondToBuyer);
-        _push(p.seller, toSeller + bondToSeller);
+        _push(p.buyer, pay.toBuyer + pay.bondToBuyer);
+        _push(p.seller, pay.toSeller + pay.bondToSeller);
 
         emit Settled(
             d.purchaseId,
             d.outcome,
             d.refundBps,
             d.criteriaMetBitmap,
-            toBuyer,
-            toSeller,
-            bondToBuyer,
-            bondToSeller,
+            pay.toBuyer,
+            pay.toSeller,
+            pay.bondToBuyer,
+            pay.bondToSeller,
             d.nonce,
             d.genlayerTxHash,
             d.decisionDigest
         );
+    }
+
+    /// @dev How a settlement divides the escrow. Split out of `settle` for two
+    ///      reasons: it is the part of settlement most worth reading on its own,
+    ///      and the four values have to share one memory slot so that the
+    ///      eleven-argument `Settled` emit fits in the EVM stack.
+    ///
+    ///      The bond returns to the buyer unless the dispute was affirmatively
+    ///      rejected — i.e. RELEASE. An inconclusive UNDETERMINED is not bad
+    ///      faith and does not forfeit it. See docs/DATA_MODEL.md §6.
+    function _payout(Purchase storage p, SettlementDecision calldata d)
+        private
+        view
+        returns (Payout memory pay)
+    {
+        uint256 price_ = p.price;
+        uint256 bond = p.disputeBond;
+        uint256 refund = (price_ * d.refundBps) / BPS_DENOMINATOR;
+
+        pay.toBuyer = refund;
+        pay.toSeller = price_ - refund;
+        pay.bondToBuyer = (d.outcome == Outcome.RELEASE) ? 0 : bond;
+        pay.bondToSeller = bond - pay.bondToBuyer;
     }
 
     // ---------------------------------------------------------------------
@@ -760,7 +796,20 @@ contract RecourseEscrow {
     function _hashDecision(SettlementDecision calldata d) private view returns (bytes32) {
         // Recompute if the chain id moved out from under the cached value.
         bytes32 domain = block.chainid == _domainChainId() ? _deployedChainIdDomain : _buildDomainSeparator();
-        bytes32 structHash = keccak256(
+        return keccak256(abi.encodePacked("\x19\x01", domain, _structHash(d)));
+    }
+
+    /// @dev The EIP-712 struct hash, in its own function so that `abi.encode`'s
+    ///      fourteen arguments do not have to share the stack with the domain
+    ///      separator. Fourteen arguments plus one live local is the ceiling the
+    ///      legacy code generator can reach; the domain separator is the
+    ///      fifteenth thing it would have had to keep hold of.
+    ///
+    ///      The field order here must match SETTLEMENT_TYPEHASH exactly — it is
+    ///      what the relayer signs over, and a reordering produces a valid
+    ///      signature over the wrong message rather than an error.
+    function _structHash(SettlementDecision calldata d) private pure returns (bytes32) {
+        return keccak256(
             abi.encode(
                 SETTLEMENT_TYPEHASH,
                 d.purchaseId,
@@ -778,7 +827,6 @@ contract RecourseEscrow {
                 d.finalized
             )
         );
-        return keccak256(abi.encodePacked("\x19\x01", domain, structHash));
     }
 
     /// @dev The chain id the cached domain separator was built for. We do not

@@ -260,6 +260,14 @@ identically on both sides:
 purchase_id = "recourse:" || chainId || ":" || escrowAddress || ":" || purchaseId
 ```
 
+The address is rendered **lowercase hex, no EIP-55 checksum** — that is what the
+escrow's own `genlayerKey()` emits. Neither consumer rebuilds this string: the
+relayer (`relayer/src/escrow.ts`) and the frontend (`frontend/src/lib/escrow.ts`)
+both call the view function and pass the result through, so the contract's
+rendering is the only one that exists. Checksummed and lowercase spellings are
+the same address but different bytes, and nothing downstream would reconcile
+them.
+
 This binds a GenLayer decision to exactly one escrow on exactly one chain. A
 decision produced for a testnet escrow cannot be replayed against a mainnet one
 that happens to share a numeric purchase id.

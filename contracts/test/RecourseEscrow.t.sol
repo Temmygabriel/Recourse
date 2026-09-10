@@ -15,6 +15,13 @@ import {HashVectors} from "./HashVectors.generated.sol";
 ///      the ordering contract of `settle()`. If a check moves, the test that
 ///      names it fails — which is the point. Tests that only care that
 ///      something was rejected use a bare `expectRevert()`.
+///
+/// @dev Criterion bitmaps are written in **hex**, because Solidity has no binary
+///      literal — `0b011` does not compile. The mapping is direct: bit `i` of
+///      the low nibble means criterion `i`, so 3 criteria span `0x0`–`0x7` and
+///      4 criteria span `0x0`–`0xf`. `0x7` is all three met, `0x3` is the first
+///      two, `0x5` is the first and third. Spelled out once here so the call
+///      sites below do not each need a comment.
 contract RecourseEscrowTest is Test {
     MockUSDC usdc;
     RecourseEscrow escrow;
@@ -135,7 +142,7 @@ contract RecourseEscrowTest is Test {
     {
         id = _deliveredOn(e, deliveryNotes);
         vm.prank(buyer);
-        e.openDispute(id, 0b010, disputeNotes);
+        e.openDispute(id, 0x2, disputeNotes);
     }
 
     /// @dev A disputed purchase with the default evidence. Criterion index 1 is
@@ -188,7 +195,7 @@ contract RecourseEscrowTest is Test {
         view
         returns (RecourseEscrow.SettlementDecision memory)
     {
-        return _decision(id, RecourseEscrow.Outcome.RELEASE, 0, 0b111);
+        return _decision(id, RecourseEscrow.Outcome.RELEASE, 0, 0x7);
     }
 
     /// @dev Sign with the escrow's own `hashDecision`, so tests and the relayer
@@ -207,8 +214,9 @@ contract RecourseEscrowTest is Test {
     }
 
     function _settle(RecourseEscrow.SettlementDecision memory d) internal {
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     // =====================================================================
@@ -272,7 +280,7 @@ contract RecourseEscrowTest is Test {
         uint256 sellerBefore = usdc.balanceOf(seller);
         uint256 buyerBefore = usdc.balanceOf(buyer);
 
-        _settle(_decision(id, RecourseEscrow.Outcome.FULL_REFUND, 10_000, 0b000));
+        _settle(_decision(id, RecourseEscrow.Outcome.FULL_REFUND, 10_000, 0x0));
 
         assertEq(usdc.balanceOf(buyer), buyerBefore + PRICE + bond, "buyer: price + bond back");
         assertEq(usdc.balanceOf(seller), sellerBefore, "seller: nothing");
@@ -286,7 +294,7 @@ contract RecourseEscrowTest is Test {
         uint256 sellerBefore = usdc.balanceOf(seller);
         uint256 buyerBefore = usdc.balanceOf(buyer);
 
-        _settle(_decision(id, RecourseEscrow.Outcome.PARTIAL_REFUND, 3_000, 0b101));
+        _settle(_decision(id, RecourseEscrow.Outcome.PARTIAL_REFUND, 3_000, 0x5));
 
         assertEq(usdc.balanceOf(buyer), buyerBefore + (uint256(PRICE) * 3_000) / 10_000 + bond);
         assertEq(usdc.balanceOf(seller), sellerBefore + (uint256(PRICE) * 7_000) / 10_000);
@@ -304,7 +312,7 @@ contract RecourseEscrowTest is Test {
         uint256 sellerBefore = usdc.balanceOf(seller);
         uint256 buyerBefore = usdc.balanceOf(buyer);
 
-        _settle(_decision(id, RecourseEscrow.Outcome.UNDETERMINED, 0, 0b010));
+        _settle(_decision(id, RecourseEscrow.Outcome.UNDETERMINED, 0, 0x2));
 
         assertEq(usdc.balanceOf(seller), sellerBefore + PRICE, "seller: price only");
         assertEq(usdc.balanceOf(buyer), buyerBefore + bond, "buyer: bond returned");
@@ -327,11 +335,11 @@ contract RecourseEscrowTest is Test {
         vm.prank(seller);
         escrow.submitDelivery(id, DELIVERY_NOTES);
         vm.prank(buyer);
-        escrow.openDispute(id, 0b001, DISPUTE_NOTES);
+        escrow.openDispute(id, 0x1, DISPUTE_NOTES);
 
         assertEq(uint256(escrow.disputeBond(price)), 0, "bond rounds to zero at dust prices");
 
-        _settle(_decision(id, RecourseEscrow.Outcome.PARTIAL_REFUND, 5_000, 0b011));
+        _settle(_decision(id, RecourseEscrow.Outcome.PARTIAL_REFUND, 5_000, 0x3));
 
         assertEq(usdc.balanceOf(address(escrow)), 0, "no dust stranded at dust prices");
     }
@@ -343,14 +351,20 @@ contract RecourseEscrowTest is Test {
         bps = uint16(bound(bps, 1, 9_999));
         uint256 id = _disputed();
 
-        _settle(_decision(id, RecourseEscrow.Outcome.PARTIAL_REFUND, bps, 0b011));
+        _settle(_decision(id, RecourseEscrow.Outcome.PARTIAL_REFUND, bps, 0x3));
 
         assertEq(usdc.balanceOf(address(escrow)), 0, "no dust may be stranded");
     }
 
     /// @dev Odd prices are where the rounding of `price * bps / 10000` shows up.
     function testFuzz_PartialRefundSplitIsExact(uint96 price, uint16 bps) public {
-        price = uint96(bound(price, 1, 1_000_000e6));
+        // Bounded by what the fixture can actually fund, not by the type. The
+        // buyer is minted 10,000 USDC in setUp and `purchase` pulls the price
+        // plus a 5% bond, so a wider bound makes `purchase` revert with
+        // "transferFrom failed" — a funding failure dressed up as a split
+        // failure. The property under test is the arithmetic, so the range only
+        // has to be one the escrow can actually reach.
+        price = uint96(bound(price, 1, 9_000e6));
         bps = uint16(bound(bps, 1, 9_999));
 
         vm.prank(seller);
@@ -362,12 +376,12 @@ contract RecourseEscrowTest is Test {
         vm.prank(seller);
         escrow.submitDelivery(id, DELIVERY_NOTES);
         vm.prank(buyer);
-        escrow.openDispute(id, 0b001, DISPUTE_NOTES);
+        escrow.openDispute(id, 0x1, DISPUTE_NOTES);
 
         uint256 buyerBefore = usdc.balanceOf(buyer);
         uint256 sellerBefore = usdc.balanceOf(seller);
 
-        _settle(_decision(id, RecourseEscrow.Outcome.PARTIAL_REFUND, bps, 0b011));
+        _settle(_decision(id, RecourseEscrow.Outcome.PARTIAL_REFUND, bps, 0x3));
 
         uint256 refund = (uint256(price) * bps) / 10_000;
         assertEq(usdc.balanceOf(buyer), buyerBefore + refund + escrow.disputeBond(price));
@@ -382,7 +396,7 @@ contract RecourseEscrowTest is Test {
     function test_Replay_SameSignedDecisionRejected() public {
         uint256 id = _disputed();
         RecourseEscrow.SettlementDecision memory d =
-            _decision(id, RecourseEscrow.Outcome.FULL_REFUND, 10_000, 0b000);
+            _decision(id, RecourseEscrow.Outcome.FULL_REFUND, 10_000, 0x0);
         bytes memory sig = _sig(d);
 
         vm.prank(relayer);
@@ -396,14 +410,15 @@ contract RecourseEscrowTest is Test {
 
     function test_Replay_FreshNonceOnSettledPurchaseRejected() public {
         uint256 id = _disputed();
-        _settle(_decision(id, RecourseEscrow.Outcome.FULL_REFUND, 10_000, 0b000));
+        _settle(_decision(id, RecourseEscrow.Outcome.FULL_REFUND, 10_000, 0x0));
 
         RecourseEscrow.SettlementDecision memory d2 = _cleanRelease(id);
         d2.nonce = 2;
 
+        bytes memory sig1 = _sig(d2);
         vm.prank(relayer);
         vm.expectRevert("not disputed");
-        escrow.settle(d2, _sig(d2));
+        escrow.settle(d2, sig1);
     }
 
     function test_Replay_NonceCannotBeReusedAcrossPurchases() public {
@@ -418,9 +433,10 @@ contract RecourseEscrowTest is Test {
         RecourseEscrow.SettlementDecision memory d = _cleanRelease(second);
         assertEq(d.nonce, 1, "fixture assumes the default nonce");
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("nonce used");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
 
         assertTrue(escrow.nonceUsed(1), "nonce ledger is global, not per-purchase");
     }
@@ -434,9 +450,10 @@ contract RecourseEscrowTest is Test {
         RecourseEscrow.SettlementDecision memory d = _cleanRelease(id);
 
         // Right caller, signature from a key that is not the relayer.
+        bytes memory sig1 = _sigWith(escrow, d, IMPOSTER_PK);
         vm.prank(relayer);
         vm.expectRevert("bad relayer signature");
-        escrow.settle(d, _sigWith(escrow, d, IMPOSTER_PK));
+        escrow.settle(d, sig1);
     }
 
     /// @dev A valid relayer signature is necessary but not sufficient — the
@@ -446,9 +463,10 @@ contract RecourseEscrowTest is Test {
         uint256 id = _disputed();
         RecourseEscrow.SettlementDecision memory d = _cleanRelease(id);
 
+        bytes memory sig1 = _sig(d);
         vm.prank(stranger);
         vm.expectRevert("not relayer");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     /// @dev Swap the verdict after signing — the classic relay-layer attack. The
@@ -457,11 +475,11 @@ contract RecourseEscrowTest is Test {
     function test_Settle_TamperedOutcomeRejected() public {
         uint256 id = _disputed();
         RecourseEscrow.SettlementDecision memory d =
-            _decision(id, RecourseEscrow.Outcome.PARTIAL_REFUND, 3_000, 0b011);
+            _decision(id, RecourseEscrow.Outcome.PARTIAL_REFUND, 3_000, 0x3);
         bytes memory sig = _sig(d);
 
         d.outcome = RecourseEscrow.Outcome.FULL_REFUND;
-        d.refundBps = 10_000; // coherent with FULL_REFUND at bitmap 0b011
+        d.refundBps = 10_000; // coherent with FULL_REFUND at bitmap 0x3
 
         vm.prank(relayer);
         vm.expectRevert("bad relayer signature");
@@ -471,7 +489,7 @@ contract RecourseEscrowTest is Test {
     function test_Settle_TamperedRefundBpsRejected() public {
         uint256 id = _disputed();
         RecourseEscrow.SettlementDecision memory d =
-            _decision(id, RecourseEscrow.Outcome.PARTIAL_REFUND, 1_000, 0b011);
+            _decision(id, RecourseEscrow.Outcome.PARTIAL_REFUND, 1_000, 0x3);
         bytes memory sig = _sig(d);
 
         d.refundBps = 9_000; // inflate the buyer's refund; still coherent
@@ -556,9 +574,10 @@ contract RecourseEscrowTest is Test {
 
         // Signed *with* finalized=false, so this is the trust boundary firing
         // and not the signature check.
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("not finalized");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     function test_Settle_WrongSourceChainRejected() public {
@@ -566,9 +585,10 @@ contract RecourseEscrowTest is Test {
         RecourseEscrow.SettlementDecision memory d = _cleanRelease(id);
         d.sourceChainId = 61997; // studio-dev, a different network
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("wrong source chain");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     function test_Settle_WrongSourceContractRejected() public {
@@ -576,9 +596,10 @@ contract RecourseEscrowTest is Test {
         RecourseEscrow.SettlementDecision memory d = _cleanRelease(id);
         d.sourceContract = address(0xBAD);
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("wrong source contract");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     function test_Settle_MismatchedPromiseHashRejected() public {
@@ -586,9 +607,10 @@ contract RecourseEscrowTest is Test {
         RecourseEscrow.SettlementDecision memory d = _cleanRelease(id);
         d.promiseHash = keccak256("a different promise than the buyer agreed to");
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("promise mismatch");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     function test_Settle_MismatchedRubricHashRejected() public {
@@ -596,9 +618,10 @@ contract RecourseEscrowTest is Test {
         RecourseEscrow.SettlementDecision memory d = _cleanRelease(id);
         d.rubricHash = keccak256("a rubric the seller never published");
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("rubric mismatch");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     function test_Settle_MismatchedEvidenceRootRejected() public {
@@ -606,9 +629,10 @@ contract RecourseEscrowTest is Test {
         RecourseEscrow.SettlementDecision memory d = _cleanRelease(id);
         d.evidenceRoot = keccak256("evidence the chain never saw");
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("evidence mismatch");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     /// @dev A verdict genuinely produced for purchase 2, relabelled as purchase
@@ -621,9 +645,10 @@ contract RecourseEscrowTest is Test {
         RecourseEscrow.SettlementDecision memory d = _cleanRelease(second);
         d.purchaseId = 1;
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("evidence mismatch");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     /// @dev Identical evidence on two purchases is the case the purchase id
@@ -643,8 +668,9 @@ contract RecourseEscrowTest is Test {
         // nonce is spent only once, so the second settlement of either id fails.
         d.purchaseId = first;
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
-        escrow.settle(d, _sig(d)); // settles `first` as claimed
+        escrow.settle(d, sig1); // settles `first` as claimed
 
         assertEq(uint256(escrow.getPurchase(first).stage), uint256(RecourseEscrow.Stage.SETTLED));
         assertEq(uint256(escrow.getPurchase(second).stage), uint256(RecourseEscrow.Stage.DISPUTED));
@@ -661,9 +687,10 @@ contract RecourseEscrowTest is Test {
         RecourseEscrow.SettlementDecision memory d = _cleanRelease(id);
         d.purchaseId = 9_999;
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert();
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     // =====================================================================
@@ -674,21 +701,23 @@ contract RecourseEscrowTest is Test {
         uint256 id = _disputed();
         // Claims release while its own bitmap admits a criterion failed.
         RecourseEscrow.SettlementDecision memory d =
-            _decision(id, RecourseEscrow.Outcome.RELEASE, 0, 0b110);
+            _decision(id, RecourseEscrow.Outcome.RELEASE, 0, 0x6);
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("release with unmet criterion");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     function test_Settle_ReleaseWithNonZeroBpsRejected() public {
         uint256 id = _disputed();
         RecourseEscrow.SettlementDecision memory d =
-            _decision(id, RecourseEscrow.Outcome.RELEASE, 500, 0b111);
+            _decision(id, RecourseEscrow.Outcome.RELEASE, 500, 0x7);
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("release bps");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     /// @dev A full refund while claiming every criterion was met is
@@ -698,41 +727,45 @@ contract RecourseEscrowTest is Test {
     function test_Settle_FullRefundWithAllCriteriaMetRejected() public {
         uint256 id = _disputed();
         RecourseEscrow.SettlementDecision memory d =
-            _decision(id, RecourseEscrow.Outcome.FULL_REFUND, 10_000, 0b111);
+            _decision(id, RecourseEscrow.Outcome.FULL_REFUND, 10_000, 0x7);
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("full refund with all criteria met");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     function test_Settle_FullRefundWithPartialBpsRejected() public {
         uint256 id = _disputed();
         RecourseEscrow.SettlementDecision memory d =
-            _decision(id, RecourseEscrow.Outcome.FULL_REFUND, 5_000, 0b000);
+            _decision(id, RecourseEscrow.Outcome.FULL_REFUND, 5_000, 0x0);
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("full refund bps");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     function test_Settle_PartialRefundWithAllCriteriaMetRejected() public {
         uint256 id = _disputed();
         RecourseEscrow.SettlementDecision memory d =
-            _decision(id, RecourseEscrow.Outcome.PARTIAL_REFUND, 3_000, 0b111);
+            _decision(id, RecourseEscrow.Outcome.PARTIAL_REFUND, 3_000, 0x7);
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("partial refund with all criteria met");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     function test_Settle_PartialRefundWithZeroBpsRejected() public {
         uint256 id = _disputed();
         RecourseEscrow.SettlementDecision memory d =
-            _decision(id, RecourseEscrow.Outcome.PARTIAL_REFUND, 0, 0b011);
+            _decision(id, RecourseEscrow.Outcome.PARTIAL_REFUND, 0, 0x3);
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("partial bps");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     function test_Settle_PartialRefundWithFullBpsRejected() public {
@@ -740,32 +773,35 @@ contract RecourseEscrowTest is Test {
         // Should have been FULL_REFUND. Claiming PARTIAL at 100% would leave the
         // seller nothing while dodging the full-refund coherence rule.
         RecourseEscrow.SettlementDecision memory d =
-            _decision(id, RecourseEscrow.Outcome.PARTIAL_REFUND, 10_000, 0b011);
+            _decision(id, RecourseEscrow.Outcome.PARTIAL_REFUND, 10_000, 0x3);
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("partial bps");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     function test_Settle_UndeterminedWithNonZeroBpsRejected() public {
         uint256 id = _disputed();
         RecourseEscrow.SettlementDecision memory d =
-            _decision(id, RecourseEscrow.Outcome.UNDETERMINED, 2_500, 0b010);
+            _decision(id, RecourseEscrow.Outcome.UNDETERMINED, 2_500, 0x2);
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("undetermined bps");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     /// @dev Only 3 criteria exist, so bit 3 is not addressable.
     function test_Settle_CriteriaBitmapOutOfRangeRejected() public {
         uint256 id = _disputed();
         RecourseEscrow.SettlementDecision memory d =
-            _decision(id, RecourseEscrow.Outcome.RELEASE, 0, 0b1111);
+            _decision(id, RecourseEscrow.Outcome.RELEASE, 0, 0xf);
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("criteria bits out of range");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     /// @dev The bitmap's upper bits must be rejected for every outcome, not just
@@ -781,10 +817,11 @@ contract RecourseEscrowTest is Test {
         uint16[3] memory bpss = [uint16(3_000), uint16(10_000), uint16(0)];
 
         for (uint256 i = 0; i < outcomes.length; i++) {
-            RecourseEscrow.SettlementDecision memory d = _decision(id, outcomes[i], bpss[i], 0b1000);
+            RecourseEscrow.SettlementDecision memory d = _decision(id, outcomes[i], bpss[i], 0x8);
+            bytes memory sig1 = _sig(d);
             vm.prank(relayer);
             vm.expectRevert("criteria bits out of range");
-            escrow.settle(d, _sig(d));
+            escrow.settle(d, sig1);
         }
     }
 
@@ -796,27 +833,30 @@ contract RecourseEscrowTest is Test {
         uint256 id = _delivered();
         RecourseEscrow.SettlementDecision memory d = _cleanRelease(id);
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("not disputed");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     function test_Settle_OnFundedPurchaseRejected() public {
         uint256 id = _funded();
         RecourseEscrow.SettlementDecision memory d = _cleanRelease(id);
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("not disputed");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     function test_Settle_OnOfferNeverPurchasedRejected() public {
         uint256 id = _offer();
         RecourseEscrow.SettlementDecision memory d = _cleanRelease(id);
 
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("not disputed");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     function test_Seller_CannotBuyOwnOffer() public {
@@ -860,7 +900,7 @@ contract RecourseEscrowTest is Test {
         uint256 id = _delivered();
         vm.prank(stranger);
         vm.expectRevert("not buyer");
-        escrow.openDispute(id, 0b001, DISPUTE_NOTES);
+        escrow.openDispute(id, 0x1, DISPUTE_NOTES);
     }
 
     function test_Deliver_AfterDeadlineRejected() public {
@@ -946,7 +986,7 @@ contract RecourseEscrowTest is Test {
 
         vm.prank(buyer);
         vm.expectRevert("review window closed");
-        escrow.openDispute(id, 0b001, DISPUTE_NOTES);
+        escrow.openDispute(id, 0x1, DISPUTE_NOTES);
     }
 
     function test_Accept_AfterReviewWindowRejected() public {
@@ -1134,21 +1174,21 @@ contract RecourseEscrowTest is Test {
         uint256 id = _delivered();
         vm.prank(buyer);
         vm.expectRevert("criterion out of range");
-        escrow.openDispute(id, 0b1000, DISPUTE_NOTES); // bit 3; only 3 criteria
+        escrow.openDispute(id, 0x8, DISPUTE_NOTES); // bit 3; only 3 criteria
     }
 
     function test_Dispute_OverlongNotesRejected() public {
         uint256 id = _delivered();
         vm.prank(buyer);
         vm.expectRevert("disputeNotes length");
-        escrow.openDispute(id, 0b001, _repeat("c", 2_001));
+        escrow.openDispute(id, 0x1, _repeat("c", 2_001));
     }
 
     function test_Dispute_BlankNotesRejected() public {
         uint256 id = _delivered();
         vm.prank(buyer);
         vm.expectRevert("disputeNotes blank");
-        escrow.openDispute(id, 0b001, "   ");
+        escrow.openDispute(id, 0x1, "   ");
     }
 
     function test_Deliver_BlankNotesRejected() public {
@@ -1175,7 +1215,7 @@ contract RecourseEscrowTest is Test {
         uint256 buyerBefore = usdc.balanceOf(buyer);
 
         vm.prank(buyer);
-        escrow.openDispute(id, 0b001, DISPUTE_NOTES);
+        escrow.openDispute(id, 0x1, DISPUTE_NOTES);
 
         assertEq(usdc.balanceOf(buyer), buyerBefore - bond, "buyer posted the bond");
         assertEq(usdc.balanceOf(address(escrow)), PRICE + bond, "escrow holds price and bond");
@@ -1197,7 +1237,7 @@ contract RecourseEscrowTest is Test {
         // Every USDC the buyer had went into escrow, so the bond cannot be pulled.
         vm.prank(brokeBuyer);
         vm.expectRevert();
-        escrow.openDispute(id, 0b001, DISPUTE_NOTES);
+        escrow.openDispute(id, 0x1, DISPUTE_NOTES);
 
         assertEq(uint256(escrow.getPurchase(id).stage), uint256(RecourseEscrow.Stage.DELIVERED));
     }
@@ -1207,7 +1247,7 @@ contract RecourseEscrowTest is Test {
 
         vm.prank(buyer);
         vm.expectRevert("not delivered");
-        escrow.openDispute(id, 0b001, DISPUTE_NOTES);
+        escrow.openDispute(id, 0x1, DISPUTE_NOTES);
     }
 
     function test_Purchase_WithoutApprovalReverts() public {
@@ -1251,9 +1291,10 @@ contract RecourseEscrowTest is Test {
         escrow.purchase(open);
 
         RecourseEscrow.SettlementDecision memory d = _cleanRelease(disputed);
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("paused");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
     }
 
     function test_Pause_BlocksNewOffersAndDisputes() public {
@@ -1270,7 +1311,7 @@ contract RecourseEscrowTest is Test {
 
         vm.prank(buyer);
         vm.expectRevert("paused");
-        escrow.openDispute(delivered, 0b001, DISPUTE_NOTES);
+        escrow.openDispute(delivered, 0x1, DISPUTE_NOTES);
     }
 
     /// @dev Pausing must not trap money already in flight. Every path that
@@ -1331,13 +1372,15 @@ contract RecourseEscrowTest is Test {
         RecourseEscrow.SettlementDecision memory d = _cleanRelease(id);
 
         // The old key no longer settles...
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("not relayer");
-        escrow.settle(d, _sig(d));
+        escrow.settle(d, sig1);
 
         // ...and the new key does.
+        bytes memory sig2 = _sigWith(escrow, d, NEW_RELAYER_PK);
         vm.prank(newRelayer);
-        escrow.settle(d, _sigWith(escrow, d, NEW_RELAYER_PK));
+        escrow.settle(d, sig2);
 
         assertEq(uint256(escrow.getPurchase(id).stage), uint256(RecourseEscrow.Stage.SETTLED));
     }
@@ -1435,24 +1478,32 @@ contract RecourseEscrowTest is Test {
         assertEq(otherId, 1, "same purchase id, so the id cannot distinguish them");
 
         RecourseEscrow.SettlementDecision memory d =
-            _decisionOn(other, otherId, RecourseEscrow.Outcome.RELEASE, 0, 0b111);
+            _decisionOn(other, otherId, RecourseEscrow.Outcome.RELEASE, 0, 0x7);
 
         // Signed against `escrow`'s domain separator, submitted to `other`.
+        bytes memory sig1 = _sig(d);
         vm.prank(relayer);
         vm.expectRevert("bad relayer signature");
-        other.settle(d, _sig(d));
+        other.settle(d, sig1);
     }
 
     function test_GenlayerKey_BindsChainEscrowAndPurchase() public {
         uint256 id = _offer();
 
+        // Lowercased deliberately. `genlayerKey` renders the escrow address with
+        // the contract's own hex encoder, which emits lowercase, while
+        // `vm.toString(address)` renders it EIP-55 checksummed. The key is
+        // opaque and both consumers — `genlayerKey()` in relayer/src/escrow.ts
+        // and in frontend/src/lib/escrow.ts — obtain it by calling the contract
+        // rather than rebuilding the string, so the contract's rendering is the
+        // only one that exists and the check has to compare against it.
         assertEq(
             escrow.genlayerKey(id),
             string.concat(
                 "recourse:",
                 vm.toString(block.chainid),
                 ":",
-                vm.toString(address(escrow)),
+                vm.toLowercase(vm.toString(address(escrow))),
                 ":",
                 vm.toString(id)
             ),
@@ -1538,7 +1589,7 @@ contract RecourseEscrowTest is Test {
             assertEq(escrow.deliveryHash(id), vectors[i].digest, vectors[i].name);
 
             vm.prank(buyer);
-            escrow.openDispute(id, 0b001, vectors[i].text);
+            escrow.openDispute(id, 0x1, vectors[i].text);
             assertEq(escrow.disputeHash(id), vectors[i].digest, vectors[i].name);
         }
     }

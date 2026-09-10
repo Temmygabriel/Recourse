@@ -3,7 +3,7 @@
 Work log, newest first. For durable decisions and constraints see
 [MEMORY.md](./MEMORY.md).
 
-**Deadline: Sept 17, 2026** (submission). Today: Sept 10, 2026.
+**Deadline: Sept 17, 2026** (submission). Today: Sept 11, 2026.
 
 ---
 
@@ -12,13 +12,13 @@ Work log, newest first. For durable decisions and constraints see
 | Area | State |
 |:--|:--|
 | Repo scaffold | 🟢 done |
-| Base escrow contract | 🟡 written, **unverified** (needs CI compile) |
-| Escrow tests | 🟡 written, **unverified** (needs CI run) |
+| Base escrow contract | 🟢 **compiles — `forge build` exits 0, solc 0.8.24** |
+| Escrow tests | 🟢 **112/112 passing locally** (was 0 executed before this session) |
 | GenLayer judgment contract | 🟡 syntax-checked locally; **SDK surface unverified** (needs `genvm-lint`) |
 | Judgment logic tests | 🟢 **passing locally** (11/11) |
 | Cross-language hash vectors | 🟢 done and locked from both sides |
 | Relayer | 🟢 written; **30/30 pure-logic tests passing locally**; SDK surface verified against the published package |
-| Frontend (7 screens) | 🔴 not started |
+| Frontend (7 screens) | 🟡 **8 routes written**; never typechecked or built — Vercel will be the first compiler |
 | CI (GitHub Actions) | ⚠️ file written, **cannot push** — token lacks `workflow` scope |
 | README / security narrative | 🟡 partly written |
 | GitHub push wired up | 🟢 working (code pushes fine; only `.github/workflows/` is blocked) |
@@ -26,18 +26,211 @@ Work log, newest first. For durable decisions and constraints see
 
 Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 
-> **No Solidity in this repo has ever been compiled.** It is written against the
-> spec and read line-by-line, but this machine cannot run `forge build`, and CI
-> cannot run until the `workflow` scope is granted. Treat the escrow and its
-> tests as "not yet known to build". The Python side is better off: the
-> deterministic logic has been executed (see below), but the GenVM SDK surface
-> is still unverified.
+> **The Solidity is now compiled and executed.** As of 2026-09-11 the escrow
+> builds under solc 0.8.24 and all 112 Foundry tests pass — the first time any
+> Solidity in this repo has been through a compiler. It took three compile
+> errors and two test-harness bugs to get there, all listed in Session 7. The
+> caveat that replaces the old one: **this was a local run on the developer
+> machine, not CI**, and CI still cannot run until the `workflow` scope is
+> granted. A local pass and a green check are not the same evidence.
+>
+> **The GenLayer SDK surface is still unverified.** The judgment contract's
+> deterministic logic has been executed (11/11), but nothing has loaded it
+> through `genvm-lint`, so its `Depends` header and nondeterminism API names
+> remain "read from the docs" rather than "confirmed by the tool".
 >
 > **The relayer is verified where it can be.** Everything it does that does not
 > touch a chain — the commitment hashes, the verdict parser, the coherence check
 > that has to agree with Solidity, the nonce derivation, chain resolution, the
 > state store — runs locally with no dependencies and no network (30 tests). The
 > parts that do touch a chain are unverified until a deploy exists.
+>
+> **Nothing has run in a browser.** All eight frontend routes are written and
+> read, but the frontend has never been through `tsc` or `next build`, because
+> this machine cannot run either and CI is blocked. Every claim about the UI in
+> the sessions below is a claim about source that has been reviewed, not
+> executed.
+
+---
+
+## 2026-09-11 — Session 7
+
+### Done
+
+- **Compiled the Solidity for the first time.** Foundry 1.8.1 was already on the
+  machine at `C:\Users\USER\.foundry\bin\` — it was simply not on `PATH`, which
+  is why five sessions of notes said `forge build` was impossible here. With the
+  user's go-ahead, `forge build --sizes` now exits 0:
+  **RecourseEscrow 16,403 B runtime** (8,173 B of margin under the 24,576 B
+  EIP-170 limit), 17,581 B initcode.
+- **Ran the escrow test suite for the first time: 112/112 pass.**
+- **Fixed three compile errors and two test-harness bugs** — all of them in code
+  that had never been through a compiler or an EVM. Listed under "Caught and
+  fixed".
+- **Wrote `contracts/.gas-snapshot`**, so the CI step that references it is a
+  real check rather than a no-op.
+- **Stopped `forge install` from committing a submodule.** It had staged
+  `.gitmodules` and a `contracts/lib/forge-std` gitlink, which would have
+  contradicted D11 and made the repo require a submodule fetch to build. Both
+  unstaged, `.gitmodules` deleted, and CI now pins `forge-std@v1.16.2`
+  explicitly — see below for why the lockfile is not the answer.
+- **Built the frontend** — eight routes, the lib layer, and five components. See
+  Session 6.
+
+### Caught and fixed
+
+Three of these are contract defects; two are defects in the tests themselves.
+The distinction matters — a test bug that presents as a contract failure is how
+a real bug gets "fixed" by weakening an assertion.
+
+1. **`Stack too deep` in `settle()` — a real contract defect.**
+   `Settled` takes eleven arguments, all live at once when it is emitted. The
+   four payout locals kept alongside them pushed the function past the EVM's
+   sixteen-slot reach. Fixed by moving the split into a `_payout()` helper that
+   returns a `Payout` memory struct — four stack slots become one, and the money
+   arithmetic gets a name. Deliberately **not** fixed with `via_ir`, which would
+   have tripled compile time on a machine that cannot spare it.
+2. **`Stack too deep` in `_hashDecision()` — same class, same fix.**
+   `abi.encode`'s fourteen arguments could not share the stack with the domain
+   separator. Split the struct hash into `_structHash()`.
+3. **`Copying nested calldata dynamic arrays to storage is not implemented`** at
+   `p.rubric = rubric`. A `string[]` is an array of dynamic arrays and the
+   legacy code generator refuses the wholesale copy. Replaced with an explicit
+   push loop, with a comment naming the error so nobody "simplifies" it back.
+4. **`Invalid character in string` for an emoji in the generated hash fixture.**
+   `scripts/gen-hash-vectors.mjs` emitted plain `"..."` literals for all vector
+   text, and a plain Solidity string literal may only contain printable ASCII.
+   The generator's own comment asserted the opposite — that Solidity literals
+   are raw UTF-8 — which is exactly the kind of confidently wrong comment that
+   costs an hour. Now emits `unicode"..."` via a `lit()` helper, and the comment
+   says why. The regenerated `hash-vectors.json` is **byte-identical**, so the
+   contract between the two implementations did not move.
+5. **`Identifier-start is not allowed at end of a number`** — Solidity has no
+   binary literals, and the test file used `0b011`-style bitmaps in 30+ places.
+   Converted to hex (`0b011` → `0x3`) with the mapping documented once at the
+   top of the test contract.
+6. **37 tests failed on a test-harness bug, not a contract bug.** `_settle()`
+   and ~30 call sites wrote `escrow.settle(d, _sig(d))`. Solidity evaluates
+   arguments before the call, and `_sig()` calls `escrow.hashDecision()` — an
+   external call, which **consumes a pending `vm.prank` and a pending
+   `vm.expectRevert`** exactly as readily as the call the test meant them for.
+   So the prank was spent on `hashDecision` (settle then ran as the test
+   contract and reverted "not relayer") and the expectRevert was spent on a call
+   that did not revert (giving "next call did not revert as expected"). Both
+   symptoms are one bug, and neither points at the contract. Fixed by hoisting
+   the signature above the arming lines — the same shape the replay test already
+   used, which is why that one test was passing while its neighbours were not.
+7. **A fuzz test was funding-bound, not arithmetic-bound.**
+   `testFuzz_PartialRefundSplitIsExact` bounded price to `1_000_000e6` against a
+   buyer minted 10,000 USDC, so most runs reverted in `transferFrom` and looked
+   like split failures. Range narrowed to what the fixture can actually fund,
+   with a comment saying the property under test is the arithmetic.
+8. **The GenLayer key test asserted a format the contract never produced.**
+   `genlayerKey()` renders the escrow address lowercase; the test compared
+   against `vm.toString(address)`, which is EIP-55 checksummed. Resolved by
+   making lowercase authoritative — both consumers (`relayer/src/escrow.ts`,
+   `frontend/src/lib/escrow.ts`) *call* `genlayerKey()` rather than rebuilding
+   the string, so the contract's rendering is the only one that exists.
+   `docs/DATA_MODEL.md` §8 now says so explicitly, because it had been silent on
+   casing and silence is what let the two spellings drift apart.
+9. **`stamp-neutral` was styled as `.stamp-undetermined`, which nothing applied.**
+   `OutcomeInfo.tone` is `'neutral'` for `UNDETERMINED`, `.status-neutral`
+   existed, `.stamp-neutral` did not — so an undetermined verdict rendered its
+   stamp with no border and no colour, the one visual state the design spec is
+   most careful about. Found by a read-only audit subagent, confirmed by hand.
+10. **`fetchAllPurchases` filtered `!== undefined` on a `Purchase | null`.**
+    The guard let every `null` through, and because the type predicate still
+    claimed `Purchase`, the compiler agreed. Any single failed `getPurchase`
+    read — reachable, since the public RPC is rate-limited and this fetches one
+    purchase per count concurrently — would have thrown on the home list rather
+    than dropping the row.
+
+### Decisions made this session
+
+- **`forge build` and `forge test` are now run locally.** The standing "all
+  heavy compute on GitHub" rule was written when `forge` was believed absent.
+  The user amended it for Solidity specifically. `npm install` and `next build`
+  for the frontend are **still** off-limits on this machine.
+- **`via_ir` is not enabled.** Both stack-depth errors were fixed by reducing
+  live locals instead, because `via_ir` costs several times the compile time and
+  this machine cannot spare it.
+- **`contracts/foundry.lock` is gitignored, and CI pins `forge-std@v1.16.2`.**
+  Forge writes the dependency key with the host's path separator, so a lockfile
+  generated on Windows says `lib\\forge-std` and every Linux CI run would
+  rewrite it. Pinning the tag in the workflow buys the same reproducibility
+  without a platform-specific file in the repo.
+
+### Blocked / needs the user
+
+- **Still `gh auth refresh -s workflow`.** Re-checked this session: the token
+  still carries only `'gist', 'read:org', 'repo'`. `.github/workflows/ci.yml`
+  exists **only in the working tree** — it is excluded via `.git/info/exclude`,
+  so it is not backed up in git. Until the scope is granted, CI cannot run and
+  that file has no history.
+- **Faucet funds** for the demo: Base Sepolia ETH + USDC on the deployer
+  `0xe5Fe9119000C9E1113dc504891A83Da7bbaa7a7b`, and ETH on the relayer
+  `0x49B4f09C5894c1C90B0ca9099AF3De0Faf7f3037`.
+- **The user's demo/browser wallet address** — wanted as the demo seller.
+
+### Next
+
+1. Push, then get CI green — it is the only thing that will ever typecheck the
+   frontend short of Vercel.
+2. Write the README, `docs/SECURITY.md` and `docs/DEPLOY.md` (both referenced by
+   other docs and neither existing yet).
+3. Deploy the escrow to Base Sepolia and the judgment contract to Studio Devnet.
+
+---
+
+## 2026-09-10 — Session 6
+
+### Done
+
+- **Built the whole frontend** — `frontend/`, Next.js 15 App Router + React 19 +
+  Tailwind 3.4 + viem. Eight routes covering build spec §5.1–5.8: home, new
+  offer, offer detail (with its actions), deliver, dispute, case, verdict,
+  receipt. Five components: `Document` (the shared primitives), `RequirementList`,
+  `PromiseVsEvidence`, `PurchaseRow`, `AppHeader`.
+- **Architected the verdict to come from Base, never from GenLayer.** Every
+  number on the case, verdict and receipt screens — outcome, per-requirement
+  marks, the split, the bond — is read from the escrow's `Settled` event. The
+  browser never loads the GenLayer SDK. Reasons in MEMORY.md.
+- **Made the escrow address lazy** (`escrowAddress()` in `lib/chain.ts`). Next 15
+  prerenders every page on the server, so reading `NEXT_PUBLIC_ESCROW_ADDRESS` at
+  module scope would turn a forgotten Vercel variable into a failed *build*
+  rather than a message in the browser. CI's frontend job deliberately sets no
+  env vars, so if anyone moves that read back to the top level the job goes red
+  instead of Vercel.
+- **Removed a `lint` script that had no eslint dependency**, which would have
+  triggered an interactive install mid-build.
+
+### Caught and fixed
+
+- **`chain.ts` would have failed `next build`** — the module-scope env read
+  described above.
+- **`receipt/[id]/page.tsx` referenced a `ESCROW_FOR_DISPLAY` that does not
+  exist** (and compared an address to the string `'0x0'`).
+- **`fetchAllPurchases` inferred purchase ids from array position.** Wrong the
+  moment one read fails: every row after it would carry its neighbour's id and
+  link to the wrong case. Now the id travels with the purchase.
+- **The time-based escape hatches rendered enabled before their deadlines**,
+  so clicking them would have reverted. Now gated on the deadline having passed.
+
+### Decisions made this session
+
+D14 in [MEMORY.md](./MEMORY.md): **a purchase has no `title` field.** Both specs
+list one and the escrow has none; adding it means editing Solidity that had
+never been compiled, for a display-only string, days out. The promise *is* the
+object, so the UI shows `#id` plus the promise text.
+
+### Blocked / needs the user
+
+- **The frontend has still never been compiled.** No `tsc`, no `next build`.
+  Vercel is currently the only thing that will ever compile it.
+
+### Next
+
+1. Compile the Solidity — Foundry turned out to be installed.
 
 ---
 

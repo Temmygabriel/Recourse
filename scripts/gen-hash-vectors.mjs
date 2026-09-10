@@ -79,8 +79,12 @@ writeFileSync(
 
 // --- Solidity fixture ------------------------------------------------------
 //
-// Solidity string literals are raw UTF-8 with no \u escape, so non-ASCII is
-// emitted as-is and only the control characters need escaping.
+// The `unicode` prefix is required, not decorative. A plain Solidity string
+// literal may only contain printable ASCII, so any vector with an accent or an
+// emoji in it fails to compile — which is how this was found. `unicode"..."`
+// types as `string` and holds the same UTF-8 bytes, so the digest calculated
+// above still describes exactly what the contract hashes. The escapes `esc`
+// emits (\\, \", \n, \t, \r) are valid in a unicode literal too.
 
 const esc = (s) =>
   s
@@ -89,6 +93,9 @@ const esc = (s) =>
     .replace(/\n/g, '\\n')
     .replace(/\t/g, '\\t')
     .replace(/\r/g, '\\r');
+
+/** A Solidity string literal that is safe for any UTF-8 input. */
+const lit = (s) => `unicode"${esc(s)}"`;
 
 const lines = [];
 lines.push('// SPDX-License-Identifier: MIT');
@@ -118,8 +125,8 @@ lines.push('');
 lines.push(`    function stringVectors() internal pure returns (StringVector[] memory v) {`);
 lines.push(`        v = new StringVector[](${stringVectors.length});`);
 stringVectors.forEach((vec, i) => {
-  lines.push(`        v[${i}].name = "${esc(vec.name)}";`);
-  lines.push(`        v[${i}].text = "${esc(vec.text)}";`);
+  lines.push(`        v[${i}].name = ${lit(vec.name)};`);
+  lines.push(`        v[${i}].text = ${lit(vec.text)};`);
   lines.push(`        v[${i}].digest = hex"${vec.sha256}";`);
 });
 lines.push('    }');
@@ -127,10 +134,10 @@ lines.push('');
 lines.push('    function rubricVectors() internal pure returns (RubricVector[] memory v) {');
 lines.push(`        v = new RubricVector[](${rubricVectors.length});`);
 rubricVectors.forEach((vec, i) => {
-  lines.push(`        v[${i}].name = "${esc(vec.name)}";`);
+  lines.push(`        v[${i}].name = ${lit(vec.name)};`);
   lines.push(`        v[${i}].rubric = new string[](${vec.rubric.length});`);
   vec.rubric.forEach((item, j) => {
-    lines.push(`        v[${i}].rubric[${j}] = "${esc(item)}";`);
+    lines.push(`        v[${i}].rubric[${j}] = ${lit(item)};`);
   });
   lines.push(`        v[${i}].digest = hex"${vec.sha256}";`);
 });

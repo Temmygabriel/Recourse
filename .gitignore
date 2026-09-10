@@ -25,6 +25,14 @@ contracts/cache/
 contracts/broadcast/
 contracts/lib/
 
+# Not ignored by choice — by necessity. `forge` writes the dependency key with
+# the host's path separator, so a lockfile generated on Windows says
+# "lib\\forge-std" and one generated on Linux says "lib/forge-std". Committing
+# it would put a platform-specific file in a repo whose CI runs on Linux, and
+# every CI run would rewrite it. The reproducibility it would buy is bought
+# instead by pinning the tag in .github/workflows/ci.yml.
+contracts/foundry.lock
+
 # --- genlayer --------------------------------------------------------------
 .genlayer/
 genlayer-artifacts/

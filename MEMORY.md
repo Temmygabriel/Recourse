@@ -4,7 +4,7 @@ Durable project memory. Read this first when resuming work. It records
 **decisions and constraints**, not a work log — for "what happened when", see
 [PROGRESS.md](./PROGRESS.md).
 
-Last updated: 2026-09-10
+Last updated: 2026-09-11
 
 ---
 
@@ -26,8 +26,8 @@ the promise was kept; Base moves the money.
 
 | Constraint | Detail |
 |:--|:--|
-| **Local machine** | 8 GB RAM, no significant compute. **Never run `npm install`, `next build`, `forge build`, or any other heavy job locally.** All heavy compute happens on GitHub Actions or Vercel. |
-| **Local toolchain** | Node v24.14.0, npm 11.9.0, git 2.53.0. **No `gh` on `PATH`** — it is installed at `C:\Users\USER\AppData\Local\gh-install\bin\gh.exe`; call it by full path or prepend that directory to `PATH`. **No `winget`.** No Vercel CLI, no SSH keys, no git credential store. |
+| **Local machine** | 8 GB RAM, no significant compute. **Never run `npm install`, `next build`, or any other heavy *frontend* job locally** — those go to GitHub Actions or Vercel. **`forge build` and `forge test` are the exception:** the user amended the rule for Solidity on 2026-09-11, after Foundry turned out to be installed all along. Solidity has a compiler locally; the frontend does not. |
+| **Local toolchain** | Node v24.14.0, npm 11.9.0, git 2.53.0. **Foundry 1.8.1 at `C:\Users\USER\.foundry\bin\forge.exe`** (also `cast`, `anvil`, `chisel`, `solar`, `foundryup`) — **not on `PATH`**; call by full path. **No `gh` on `PATH`** — it is installed at `C:\Users\USER\AppData\Local\gh-install\bin\gh.exe`; call it by full path or prepend that directory to `PATH`. **No `winget`.** No Vercel CLI, no SSH keys, no git credential store. |
 | **Deployment** | Vercel, connected via the Vercel dashboard to the GitHub repo (not the CLI). Vercel runs install+build in its own cloud. |
 | **Chain** | Base **Sepolia** testnet only. No mainnet, no real funds, ever, in this build. |
 | **GenLayer** | Consensus **v0.6** / Studio **v0.123** release family. See below. |
@@ -51,6 +51,11 @@ the promise was kept; Base moves the money.
 | D11 | **`src/` has zero Solidity dependencies; `forge-std` is installed by CI, not committed** | `contracts/lib/` is gitignored and the escrow imports nothing external, so a clean clone builds with no submodules. Only the test suite needs `forge-std`, so CI runs `forge install foundry-rs/forge-std --no-commit` before `forge test`. |
 | D12 | **Every commitment hash is over verbatim bytes — no layer may trim, collapse, or normalise text before hashing** | The escrow reverts on over-length text rather than truncating so that `sha256(bytes(stored_text))` always describes exactly what the parties read and what GenLayer evaluates. The Solidity escrow and the GenLayer judgment contract are the only two implementations of these hashes, in different languages on different chains, and neither can detect that the other started stripping whitespace — the escrow would stay internally consistent while every relayed package failed its hash check, leaving real disputes permanently unjudgeable. `docs/vectors/hash-vectors.json` is the contract between them; `scripts/gen-hash-vectors.mjs` generates both that file and `contracts/test/HashVectors.generated.sol`, and CI regenerates and diffs them. |
 | D13 | **The build targets Studio Devnet (chain 61997) only. Bradbury is for a contract deploy later, and nothing else depends on it yet.** | User's explicit instruction, 2026-09-10: *"let just focus on studiodev or what ever it called due to migration, we would only be deploying the contract on bradbury, the main build would be on studiodev."* So `GENLAYER_CHAIN` defaults to `studioDevnet` and the relayer's `assertChainMatchesEscrow` compares against 61997. Do not add Bradbury/Asimov fallbacks, dual-chain config, or chain-switching logic — a second target is surface area with no current consumer. The one caveat worth remembering: Studio Devnet may reset, which is why the escrow keeps `sourceChainId` immutable, so a later move to Bradbury is a redeploy rather than a rewrite. |
+| D14 | **A purchase has no `title` field. Its identity is its id and the seller's promise text.** | Both specs list a title (build spec §2, design spec §5.1) and the escrow has no such field — `createOffer(price, deliveryDeadline, reviewWindow, promiseText, rubric)` is the whole write surface, and `Purchase` runs `promiseText, rubric[], deliveryNotes, disputeNotes`. Adding one means editing Solidity whose tests cannot be run, to add a display-only string, seven days out. The offer list and every header therefore show `#id` plus the promise itself, which is also more consistent with the product's thesis that the promise *is* the object. **Revisit now that `forge test` runs locally** — the original objection (unverifiable Solidity edit) is gone; the two files to update are `frontend/src/lib/abi.ts` (`purchaseComponents`, positional) and the relayer's `Purchase` interface. |
+| D15 | **`via_ir` stays off. Stack-depth errors are fixed by reducing live locals.** | Both `Stack too deep` errors (in `settle` and `_hashDecision`) were fixed structurally — a `Payout` memory struct and a `_structHash` helper — rather than by enabling the IR pipeline. `via_ir` costs several times the compile time on a machine with no compute to spare, and it would have to be mirrored into CI. The structural fixes are also better code. |
+| D16 | **`contracts/foundry.lock` is gitignored; CI pins `forge-std@v1.16.2` in the workflow instead.** | Forge writes the lockfile's dependency key with the **host's path separator** — a Windows-generated lockfile says `"lib\\forge-std"`, a Linux one says `"lib/forge-std"`. Committing it puts a platform-specific file in a repo whose CI runs on Linux, and every CI run rewrites it. Pinning the tag buys the same reproducibility without the churn. |
+| D17 | **`genlayerKey()` renders the escrow address lowercase, and lowercase is authoritative.** | Not a free choice — it is what the contract's own hex encoder emits. What makes it safe is that **neither consumer rebuilds the string**: `relayer/src/escrow.ts` and `frontend/src/lib/escrow.ts` both call the view function and pass the result through, so only one rendering exists. `docs/DATA_MODEL.md` §8 now states the casing explicitly; it had been silent, which is what let a test drift onto EIP-55 checksummed and fail. |
+| D18 | **In Foundry tests, never leave an external call inside the argument list of the call you are arming `vm.prank`/`vm.expectRevert` for.** Compute the signature into a local on the line above. | Solidity evaluates arguments before the call, and a pending `vm.prank` or `vm.expectRevert` is consumed by the **next call of any kind — a `view` function included**. So `escrow.settle(d, _sig(d))`, where `_sig` calls `escrow.hashDecision`, spends the prank on `hashDecision`: `settle` then runs as the test contract and reverts `"not relayer"`, and the expectRevert is spent on a call that did *not* revert, so the test fails with "next call did not revert as expected". Both symptoms are one bug and **neither points at the contract** — this cost 37 red tests on 2026-09-11 that were all the harness's fault. The file was fixed by hoisting; keep the convention when adding tests. |
 
 ---
 
@@ -135,6 +140,43 @@ files).
 
 ---
 
+## The frontend reads the verdict from Base, never from GenLayer
+
+Every number on the case, verdict and receipt screens — the outcome, the
+per-requirement met/not-met marks, the seller/buyer split, the bond movement —
+comes from the escrow's `Settled` event. **The browser never loads the GenLayer
+SDK.** Three reasons, all of which matter more than the small saving in bundle
+size:
+
+1. Base is the chain that *moved the money*, so it is the right authority for
+   "what was settled". GenLayer's answer is an input to that; the escrow's
+   record is the result.
+2. The three screens cannot disagree, because they read one event through one
+   function (`fetchSettlement` in `frontend/src/lib/escrow.ts`).
+3. It keeps a second RPC endpoint, a second chain config and a set of keys out
+   of a client bundle that a judge will open in a browser.
+
+The consequence to remember when extending the UI: if a fact is not in the
+`Settled` event, the frontend does not have it. The GenLayer reason text, the
+appeal state and anything else protocol-side are deliberately not surfaced.
+`Settled` carries `purchaseId, outcome, refundBps, criteriaMetBitmap,
+buyerAmount, sellerAmount, bondToBuyer, bondToSeller, nonce, genlayerTxHash,
+decisionDigest` — and the **three non-judgment paths** (`acceptDelivery`,
+`claimReviewTimeout`, `claimDeadlineRefund`) also emit `Settled`, with a zero
+`genlayerTxHash` and zero nonce, because no judgment was involved. The UI says
+so in words rather than printing a row of zeroes.
+
+There is also **one delivery-evidence text and one dispute-evidence text** per
+purchase, not one per criterion. The judgment contract receives the buyer's
+disputed *indices* alongside those two blobs. So the comparison screen
+(`frontend/src/components/PromiseVsEvidence.tsx`) shows the requirement list as
+the spine with the disputed/found marks on it, and the two texts whole. It
+deliberately does **not** split them per criterion — that split does not exist in
+the data, and inventing one would be the single most misleading thing this UI
+could do.
+
+---
+
 ## Repository shape
 
 ```
@@ -151,13 +193,29 @@ docs/        DATA_MODEL.md, SECURITY.md, DEPLOY.md
 
 ## Open questions / not yet decided
 
-- Which GenLayer network the demo targets: stable Studionet (61999) vs
-  studio-dev (61997). Chain config is built to switch by env var so this can be
-  decided late.
 - Whether a GenLayer contract deploy requires a fee on the target network (the
   migration doc says detect gaslessness from the estimate, not the name).
 - **Blocked on the user:** the GitHub token lacks the `workflow` scope, so
   `.github/workflows/ci.yml` cannot be pushed until they run
-  `gh auth refresh -s workflow`. CI is the only place the Solidity and GenVM
-  code actually compiles, so nothing is verified until this is done. The current
-  workflow file exists only in the working tree.
+  `gh auth refresh -s workflow`.
+  **Re-checked 2026-09-11, session 7:** still
+  `Token scopes: 'gist', 'read:org', 'repo'`.
+  Two consequences, and they are no longer the same consequence:
+  - The **Solidity** no longer needs CI to be verified — `forge build` and
+    `forge test` run locally (112/112). What CI adds there is a second opinion
+    on a different compiler/platform, not first light.
+  - The **GenVM SDK surface still needs CI**, because `genvm-lint` is what
+    proves the contract's `Depends` header and nondeterminism API names are
+    real. Nothing local substitutes for it.
+  - `.github/workflows/ci.yml` exists **only in the working tree** — it is
+    excluded via `.git/info/exclude`, so it is not backed up in git at all. If
+    the working tree is lost before the scope is granted, that file is lost.
+- **Also blocked, and now the bigger problem:** `frontend/` has never been
+  typechecked or built. `next build` cannot run here (8 GB machine, and the user
+  asked for heavy compute to happen on GitHub), so Vercel is currently the only
+  thing that will ever compile the frontend. Until the repo is connected to
+  Vercel, the eight routes are reviewed by reading, not by a compiler. A
+  read-only audit found no build-breaking defect and two real runtime ones (both
+  now fixed), but an audit is not a compiler.
+- The user's demo/browser wallet address — wanted as the demo seller, so the
+  escrow has a second real address to show beside the deployer.
