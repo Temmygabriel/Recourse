@@ -97,7 +97,13 @@ export function PromiseVsEvidence({
                   The seller did not mark this as delivered.
                 </p>
               ) : (
-                <div className="exhibit">
+                /*
+                 * Dashed, not solid (design direction §6.6). Everything else on
+                 * this screen is a document the app produced; this box is the
+                 * seller's own words, attached. The change of border is what
+                 * says "exhibit" without needing a label to say it.
+                 */
+                <div className="exhibit exhibit-dashed">
                   <div className="exhibit-head">
                     <span className="text-[12px] text-ink-muted">
                       The seller&rsquo;s delivery notes, as submitted
@@ -122,7 +128,7 @@ export function PromiseVsEvidence({
             }
           />
           <DocBody>
-            <div className="exhibit">
+            <div className="exhibit exhibit-dashed">
               <div className="exhibit-head">
                 <span className="text-[12px] text-ink-muted">
                   The buyer&rsquo;s notes, as submitted

@@ -247,13 +247,39 @@ docs/        DATA_MODEL.md, SECURITY.md, DEPLOY.md
   - `.github/workflows/ci.yml` exists **only in the working tree** — it is
     excluded via `.git/info/exclude`, so it is not backed up in git at all. If
     the working tree is lost before the scope is granted, that file is lost.
-- **Also blocked, and now the bigger problem:** `frontend/` has never been
-  typechecked or built. `next build` cannot run here (8 GB machine, and the user
-  asked for heavy compute to happen on GitHub), so Vercel is currently the only
-  thing that will ever compile the frontend. Until the repo is connected to
-  Vercel, the eight routes are reviewed by reading, not by a compiler. A
-  read-only audit found no build-breaking defect and two real runtime ones (both
-  now fixed), but an audit is not a compiler.
+- **Solved 2026-09-11, session 8:** `frontend/` now **is** typechecked and
+  built. `npx tsc --noEmit` exit 0 and `npx next build` exit 0, nine routes,
+  against the locked versions in `package-lock.json`. Run in a scratch copy at
+  `%TEMP%\recourse-tsc` so the heavy compute stayed off the 8 GB machine and out
+  of the repo; the source compiled is byte-identical to the repo's. Vercel is no
+  longer the first compiler. It is still the first *host*, so a deploy remains
+  the real proof.
+- **CRITICAL PATH — the GenLayer deploy is blocked by Bradbury, not by code.**
+  No GenLayer contract address exists, and `sourceContract` on the escrow is
+  immutable, so the Base escrow deploy cannot start until one does.
+  Two independent faults, both confirmed by measurement on 2026-09-11:
+  1. A stranded deploy (`0x139c9ed1…823e`, nonce 284) sits unmined in the pool
+     having bid **0.1732 gwei**, while the network price is **0.1568 gwei**.
+     The CLI has **no gas-price flag** (`deploy` accepts only `--contract`,
+     `--rpc`, `--args`), so every retry bids below the stranded tx and is
+     rejected: `insufficient gas price to replace existing transaction`.
+     **Retrying cannot succeed while the network price is under 0.1732 gwei.**
+  2. `rpc-bradbury.genlayer.com` **load-balances across nodes with
+     unsynchronised mempools**. Polling one hash three times returned
+     `null`, `null`, `FOUND`. So pool membership has no single answer at this
+     endpoint, and the CLI's receipt wait races whichever node answers.
+  Ways out: wait for the gas price to rise above 0.1732 and retry; create a
+  **fresh** GenLayer account (a new account does not inherit the stranded
+  nonce) and fund it from a faucet; or get the CLI keystore password from the
+  user to replace the tx at nonce 284 with a higher bid. The keystore is
+  `~/.genlayer/keystores/default.json` — scrypt v3, password-held, so it cannot
+  be read without the user.
+- **Issue 4 from `genlayer-known-money-rails-issues.md` is unmeasured for us.**
+  Bradbury rejects deploys whose **compiled artifact** exceeds ~39,869 B.
+  `recourse_judgment.py` is 21,296 B of *source*; the artifact size is what
+  matters and has not been measured. Details and the minify fallback are in
+  [docs/MONEY_RAILS_AUDIT.md](./docs/MONEY_RAILS_AUDIT.md). Issues 1–3 do not
+  apply — the judgment contract has no payout rail and no payable method.
 - ~~The user's demo/browser wallet address~~ — **answered 2026-09-11.**
   `0x0DE10708F8c6DF7b73068d53def715A70C0f340D`, key in `.secrets/demo.json`.
   Still needs Base Sepolia ETH (it has none), and USDC if it plays the buyer.

@@ -3,12 +3,15 @@
 @tailwind utilities;
 
 /*
- * Recourse — the inspection-record theme.
+ * Recourse — the security-paper theme.
  *
- * The visual reference is a customs form or a claims file, not a dashboard:
- * light neutral paper, strong black type, hairline rules doing the work that
- * shadows and rounded cards would otherwise do, and exactly one loud element
- * per screen — the stamped disposition mark on the verdict.
+ * See recourse_design_direction_security_paper.md §1, which supersedes
+ * docs/specs/design_spec.md §1–2. The visual reference is the pale patterned
+ * stock used on cheques and stock certificates — hard to forge, which is the
+ * same idea as the tamper-evident evidence model in the contract. Light sage
+ * surfaces, deep green-black type, hairline rules doing the work that shadows
+ * and rounded cards would otherwise do, and exactly one loud element per
+ * screen — the stamped disposition mark on the verdict.
  *
  * Everything below is a component class rather than a pile of utilities,
  * because these are document primitives that recur across screens and should
@@ -81,6 +84,26 @@
     @apply mx-auto max-w-page px-4 sm:px-6;
   }
 
+  /*
+   * The security band. A thin repeating diagonal, echoing the guilloché
+   * engraving on real security paper — the anti-forgery texture is a visual
+   * echo of the hash-locked evidence model in docs/DATA_MODEL.md §3.
+   *
+   * Applied once at the top of the header and once at the bottom of the footer:
+   * it is a page frame, never a per-card decoration. Do not add it inside
+   * `.doc-card` or `.exhibit`.
+   */
+  .security-band {
+    height: 8px;
+    background-image: repeating-linear-gradient(
+      135deg,
+      theme('colors.rule') 0px,
+      theme('colors.rule') 1.5px,
+      transparent 1.5px,
+      transparent 7px
+    );
+  }
+
   /* A bordered document section. Sharp-ish corners, no shadow — the border is
      the structure. Shadows are what make a form look like a SaaS card. */
   .doc-card {
@@ -137,20 +160,33 @@
     @apply flex gap-3 py-3;
   }
 
+  /*
+   * The unjudged circle: outlined in ink, number in ink, no fill (design
+   * direction §5). It has to be a real outline, because its whole job is to be
+   * the thing the filled circles are visibly different from — a hairline sage
+   * border would leave "not yet judged" looking like "faintly judged".
+   */
   .req-num {
     @apply mt-[2px] flex h-6 w-6 shrink-0 items-center justify-center rounded-full
-           border border-rule font-mono text-[11px] text-ink-muted;
+           border border-ink font-mono text-[11px] text-ink;
   }
 
   .req-text {
     @apply min-w-0 flex-1;
   }
 
-  /* A requirement the verdict marked as not met. The left rule is the only
-     colour on the row; the text stays black so it is still readable when
-     printed or screenshotted into a demo video. */
+  /* A requirement the verdict marked as not met. The left rule is no longer
+     doing all the work by itself (see the filled circles below), but it stays,
+     and the text stays ink so the row is still readable when printed or
+     screenshotted into a demo video. */
   .req-unmet {
-    @apply border-l-2 border-l-refund pl-3;
+    @apply border-l-2 border-l-contested;
+    background: rgba(122, 35, 49, 0.07);
+    /* Pulled wider than the row's own padding so the wash reads as a
+       highlighted block rather than as coloured text. */
+    margin-left: -0.75rem;
+    padding-left: 1.5rem;
+    padding-right: 0.75rem;
   }
 
   .req-met {
@@ -158,18 +194,19 @@
   }
 
   .req-disputed {
-    @apply bg-[#FBF7F4];
+    background: rgba(122, 35, 49, 0.05);
   }
 
-  /* The buyer's tick, while choosing what to dispute. Same left rule as the
+  /* The buyer's tick, while choosing what to dispute. Same burgundy as the
      verdict's "not met", so the row a buyer ticks and the row the verdict
-     reports look like the same row — because on the settled screen they are. */
+     reports look like the same row — because on the settled screen they are.
+     §6.5 is explicit that selection introduces no new hue. */
   .req-selected {
-    @apply border-l-2 border-l-accent bg-accent/[0.04] pl-3;
+    @apply border-l-2 border-l-contested bg-contested/[0.04] pl-3;
   }
 
   .req-check {
-    @apply mt-[3px] h-4 w-4 shrink-0 cursor-pointer accent-accent;
+    @apply mt-[3px] h-4 w-4 shrink-0 cursor-pointer accent-contested;
   }
 
   .req-mark {
@@ -181,7 +218,31 @@
   }
 
   .req-unmet .req-mark {
-    @apply text-refund;
+    @apply text-contested;
+  }
+
+  /*
+   * The numbered circle itself fills once there is a verdict. A coloured left
+   * border alone tested as too quiet to find at a glance; a filled disc is what
+   * the eye lands on when scanning the case and verdict screens. The number
+   * flips to `paper` so it stays legible on the fill.
+   *
+   * Before a verdict the circle stays outlined and unfilled — that is the plain
+   * `.req-num` above, and it must not be restyled, because on the offer and
+   * dispute screens nothing has been judged yet.
+   */
+  .req-met .req-num {
+    @apply border-release bg-release text-paper;
+  }
+
+  .req-unmet .req-num {
+    @apply border-contested bg-contested text-paper;
+  }
+
+  /* Selecting a criterion to dispute fills its circle in the same burgundy as
+     an unmet one, because on the settled screen that row *is* the unmet one. */
+  .req-selected .req-num {
+    @apply border-contested bg-contested text-paper;
   }
 
   /* --- Page furniture ---------------------------------------------------- */
@@ -197,6 +258,72 @@
 
   .lede {
     @apply mt-2 max-w-measure text-[14px] text-ink-muted;
+  }
+
+  /* --- The home hero (design direction §6.1) ----------------------------- */
+
+  /*
+   * The one screen that gets a pitch above the fold. Every other screen leads
+   * with its document and its state chip, and the comment on `.page-head` above
+   * still holds for them — but a first-time visitor arriving at the front door
+   * has no document to lead with, so this explains the product once and then
+   * gets out of the way of the real list underneath.
+   *
+   * All of it is measured in characters rather than pixels because the point is
+   * the reading, not the box: a headline that wraps to a lonely third line, or a
+   * subhead that runs the full width of a desktop monitor, both stop being read.
+   */
+  .hero {
+    @apply mb-8 border-b border-rule pb-7;
+  }
+
+  .hero h1 {
+    @apply max-w-[17ch] text-[32px] font-bold leading-[1.15];
+  }
+
+  .hero-sub {
+    @apply mt-3 max-w-[46ch] text-[13px] text-ink-muted;
+  }
+
+  .steps {
+    @apply mt-6 flex flex-wrap gap-x-8 gap-y-5;
+  }
+
+  .step {
+    @apply flex min-w-0 items-start gap-3;
+  }
+
+  /* The 44px outlined circle. Ink by default; the third step overrides it to
+     green, which is the only place in the hero that carries a colour. */
+  .step-mark {
+    @apply flex h-11 w-11 shrink-0 items-center justify-center rounded-full
+      border border-ink text-ink [&>svg]:h-6 [&>svg]:w-6;
+  }
+
+  .step-mark-done {
+    @apply border-release text-release;
+  }
+
+  .step-label {
+    @apply text-[12px] font-bold;
+  }
+
+  .step-note {
+    @apply mt-0.5 max-w-[26ch] text-[11px] text-ink-muted;
+  }
+
+  /*
+   * The proof card. Rendered only when a real settlement exists to show — the
+   * page omits it entirely otherwise, because a fabricated number here would be
+   * the single most dishonest thing this app could print.
+   */
+  .proof {
+    @apply mt-6 flex flex-wrap items-center gap-x-5 gap-y-3 rounded-card
+      border border-rule bg-surface px-4 py-3;
+  }
+
+  .proof-figure {
+    @apply font-display text-lg;
   }
 
   /* --- The comparison, side by side -------------------------------------- */
@@ -237,6 +364,17 @@
     @apply border border-rule bg-surface rounded-card;
   }
 
+  /*
+   * An exhibit *attached* to the file rather than a document card bound into
+   * it: dashed border, one shade lighter than surface. Use alongside
+   * `.exhibit` on the case screen so the quoted evidence reads as an
+   * attachment, distinct from the solid-bordered cards around it.
+   */
+  .exhibit-dashed {
+    @apply border-dashed;
+    background: #F7FAF3;
+  }
+
   .exhibit-head {
     @apply flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1
            border-b border-rule px-3 py-2;
@@ -269,12 +407,11 @@
     @apply border-release/40 bg-release/[0.07] text-release;
   }
 
-  .status-partial {
-    @apply border-partial/40 bg-partial/[0.07] text-partial;
-  }
-
-  .status-refund {
-    @apply border-refund/40 bg-refund/[0.07] text-refund;
+  /* One burgundy covers both "being contested" and "a refund happened". The
+     stamp's own text and the money split already separate partial from full,
+     so the old second refund hue added noise without adding information. */
+  .status-contested {
+    @apply border-contested/40 bg-contested/[0.07] text-contested;
   }
 
   .status-neutral {
@@ -289,8 +426,12 @@
            disabled:cursor-not-allowed disabled:opacity-45;
   }
 
+  /* Solid ink, not an outlined accent border. Review flagged the old outline as
+     barely visible and noted the app wasn't spending its accent colour anywhere
+     useful. A solid fill reads as the obvious primary action on every screen;
+     everything else stays outlined, and that contrast is what makes it findable. */
   .btn-primary {
-    @apply border-accent bg-accent text-white hover:bg-[#182E4C] hover:border-[#182E4C];
+    @apply border-ink bg-ink text-paper hover:bg-[#0F1712] hover:border-[#0F1712];
   }
 
   .btn-secondary {
@@ -298,7 +439,7 @@
   }
 
   .btn-danger {
-    @apply border-refund bg-surface text-refund hover:bg-refund/[0.06];
+    @apply border-contested bg-surface text-contested hover:bg-contested/[0.06];
   }
 
   .input,
@@ -353,14 +494,11 @@
     background: rgba(47, 107, 79, 0.05);
   }
 
-  .stamp-partial {
-    @apply border-partial text-partial;
-    background: rgba(138, 90, 43, 0.05);
-  }
-
-  .stamp-refund {
-    @apply border-refund text-refund;
-    background: rgba(122, 59, 59, 0.05);
+  /* Both refund outcomes stamp in the same burgundy ink; the stamp's own text
+     ("Partial refund" / "Full refund") is what separates them. */
+  .stamp-contested {
+    @apply border-contested text-contested;
+    background: rgba(122, 35, 49, 0.05);
   }
 
   /* Named for the tone, matching `.status-neutral` above and `OutcomeInfo.tone`
@@ -379,13 +517,43 @@
    * against each other — the whole point of showing them side by side.
    */
   .amount {
-    @apply font-display text-2xl;
+    /* 22px, per design direction §6.3. Large enough to be the thing you see
+       first on a stub, small enough that it does not compete with the page
+       title. */
+    @apply font-display text-[22px];
     font-variant-numeric: tabular-nums;
   }
 
   .money-row {
     @apply flex items-baseline justify-between gap-4 py-2;
     font-variant-numeric: tabular-nums;
+  }
+
+  /*
+   * The price panel reads as a payment stub (design direction §6.3): a small
+   * label saying what the figure *is*, the figure itself, a hairline, then the
+   * particulars. The label matters more than it looks — the same number means
+   * "what they're asking" before purchase and "what is being held" after, and
+   * an unlabelled figure would leave the reader to work out which.
+   */
+  .stub-label {
+    @apply text-[11px] font-medium uppercase tracking-wide text-ink-muted;
+  }
+
+  .stub-rule {
+    @apply mt-3 border-t border-rule;
+  }
+
+  /*
+   * The dispute bond, as its own strip at the foot of the case card rather than
+   * a clause inside the prose (design direction §6.6). It is a different fact
+   * from the amount in dispute: that money is the buyer's own, posted to open
+   * the case, and it moves on the same verdict. Run into a sentence it would be
+   * the number a buyer is most likely to have forgotten they paid.
+   */
+  .bond-strip {
+    @apply mt-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1
+      rounded-card border border-rule bg-paper px-3 py-2;
   }
 }
 

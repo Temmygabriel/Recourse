@@ -206,7 +206,7 @@ export function Notice({
 }) {
   const cls =
     tone === 'error'
-      ? 'border-refund/40 bg-refund/[0.05] text-refund'
+      ? 'border-contested/40 bg-contested/[0.05] text-contested'
       : tone === 'ok'
         ? 'border-release/40 bg-release/[0.05] text-release'
         : 'border-rule bg-paper text-ink-muted';

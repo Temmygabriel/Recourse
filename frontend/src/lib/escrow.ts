@@ -132,6 +132,44 @@ export async function fetchSettlement(id: number): Promise<Settlement | null> {
   }
 }
 
+/**
+ * Every settled purchase's outcome, keyed by purchase id.
+ *
+ * Read as **one** log query rather than one per row. The list needs the outcome
+ * only to colour a row's stage bar, and calling `fetchSettlement(id)` per
+ * settled row would be N round trips against a rate-limited public RPC to
+ * produce a single class name. `purchaseId` is an indexed topic on `Settled`,
+ * so one unfiltered query returns every settlement and the map is built here.
+ *
+ * Where a purchase has more than one `Settled` log the last one wins, matching
+ * `fetchSettlement`'s "latest log" rule — the two must agree, or the list and
+ * the detail page would disagree about the same purchase.
+ *
+ * A failure here is swallowed: it costs the list its colour coding and nothing
+ * else, and the rows still render against a neutral bar. That is a better
+ * outcome than taking the whole list down over a decoration.
+ */
+export async function fetchSettledOutcomes(): Promise<Map<number, number>> {
+  const outcomes = new Map<number, number>();
+  try {
+    const logs = await publicClient().getLogs({
+      address: ESCROW.address,
+      event: SETTLED_EVENT,
+      fromBlock: 0n,
+      toBlock: 'latest',
+    });
+    for (const log of logs) {
+      const id = log.args.purchaseId;
+      const outcome = log.args.outcome;
+      if (id === undefined || outcome === undefined) continue;
+      outcomes.set(Number(id), Number(outcome));
+    }
+  } catch {
+    // See above — this costs a colour, not the page.
+  }
+  return outcomes;
+}
+
 /** The dispute bond the contract would charge for this price. */
 export async function disputeBondFor(price: bigint): Promise<bigint> {
   return (await publicClient().readContract({

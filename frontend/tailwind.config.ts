@@ -16,22 +16,26 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Design spec §2. Light neutral surfaces, strong black type. Named for
-        // their role rather than their hue, so the palette can move without
-        // renaming every className.
-        paper: '#FAFAF8',
-        surface: '#FFFFFF',
+        // Security paper. See recourse_design_direction_security_paper.md §2,
+        // which supersedes design_spec.md §2. The reference is the faintly
+        // patterned stock used on cheques and stock certificates — chosen
+        // because it is hard to forge, which is a visual echo of the
+        // hash-locked evidence model in docs/DATA_MODEL.md §3. Named for role
+        // rather than hue so the palette can move without renaming classNames.
+        paper: '#E9F0E2', // pale sage stock
+        surface: '#F3F7EE', // card surface, warmer than paper
         ink: {
-          DEFAULT: '#16161A',
-          muted: '#5B5B63',
+          DEFAULT: '#1B2620', // deep green-black, deliberately not pure black
+          muted: '#4B5A44', // muted sage-gray for secondary text
         },
-        rule: '#E4E4E0',
-        // Restrained status colours — deliberately not a neon palette.
-        pending: '#8A7A3C',
-        release: '#2F6B4F',
-        partial: '#8A5A2B',
-        refund: '#7A3B3B',
-        accent: '#1F3A5F',
+        rule: '#C9D8BC', // sage hairline — borders AND the security band
+        pending: '#8A7A3C', // amber, for procedural "waiting" states only
+        // Burgundy rubber-stamp ink. One hue covers both "being contested" and
+        // "a refund happened": the stamp's own text and the money split already
+        // separate partial from full, so the old second refund hue was noise.
+        contested: '#7A2331',
+        release: '#2F6B4F', // met / released to the seller
+        accent: '#1F3A5F', // plain text links only — buttons no longer use it
       },
       fontFamily: {
         // A document/legal register for headings; the system stack for body.

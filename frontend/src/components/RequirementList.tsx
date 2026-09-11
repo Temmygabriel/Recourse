@@ -80,7 +80,7 @@ export function RequirementList({
                 </span>
               ) : (
                 isDisputed && (
-                  <span className="req-mark text-accent" aria-label="Named in the dispute">
+                  <span className="req-mark text-contested" aria-label="Named in the dispute">
                     Disputed
                   </span>
                 )

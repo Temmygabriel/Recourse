@@ -125,6 +125,39 @@ export default function CasePage() {
                 ? 'None submitted'
                 : `${purchase.deliveryNotes.length} characters, locked`}
             </Field>
+
+            {/*
+              The bond gets its own strip rather than a fourth Field, because it
+              is not a fact about the dispute — it is a second sum of money the
+              buyer put up to open one, and it moves on the same verdict.
+
+              Held cases read the amount from the struct, so it is what the
+              escrow actually took. Settled cases read `bondToBuyer` from the
+              settlement instead, because that is the only record of where the
+              bond actually ended up — the struct still holds the original
+              amount, which by then is a fact about the past.
+            */}
+            {purchase.disputeBond > 0n && (
+              <div className="bond-strip">
+                <span className="text-[12px] text-ink-muted">
+                  {settlement === null
+                    ? 'Dispute bond — posted by the buyer'
+                    : settlement.bondToBuyer > 0n
+                      ? 'Dispute bond — returned to the buyer'
+                      : 'Dispute bond — forfeited to the seller'}
+                </span>
+                <span className="font-display text-[15px]">
+                  {formatUsdc(settlement === null ? purchase.disputeBond : settlement.bondToBuyer)}
+                </span>
+                <span className="w-full text-[11px] text-ink-muted">
+                  {settlement === null
+                    ? 'Posted to open the case. It comes back in full if the dispute is upheld, and goes to the seller if it is not.'
+                    : settlement.bondToBuyer > 0n
+                      ? 'Awarded back because the buyer’s dispute was upheld.'
+                      : 'Awarded to the seller because the buyer’s dispute was not upheld.'}
+                </span>
+              </div>
+            )}
           </DocBody>
         </DocCard>
       </div>

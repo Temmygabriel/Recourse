@@ -24,7 +24,7 @@ export interface StageInfo {
   label: string;
   /** One line on what is happening now. */
   blurb: string;
-  tone: 'neutral' | 'pending' | 'release' | 'partial' | 'refund';
+  tone: 'neutral' | 'pending' | 'release' | 'contested';
 }
 
 const STAGE_INFO: Record<StageValue, StageInfo> = {
@@ -51,7 +51,7 @@ const STAGE_INFO: Record<StageValue, StageInfo> = {
   [STAGE.DISPUTED]: {
     label: 'In dispute',
     blurb: "The buyer says part of the promise wasn't kept. GenLayer's validator network is comparing the promise against the evidence.",
-    tone: 'pending',
+    tone: 'contested',
   },
   [STAGE.SETTLED]: {
     label: 'Settled',
@@ -82,13 +82,13 @@ export interface OutcomeInfo {
   /** The loud variant, used for the stamp mark only. */
   stamp: string;
   /** Which stamp/status colour class to apply. */
-  tone: 'release' | 'partial' | 'refund' | 'neutral';
+  tone: 'release' | 'contested' | 'neutral';
 }
 
 const OUTCOME_INFO: Record<OutcomeValue, OutcomeInfo> = {
   [OUTCOME.RELEASE]: { label: 'Released to seller', stamp: 'Released', tone: 'release' },
-  [OUTCOME.PARTIAL_REFUND]: { label: 'Partial refund', stamp: 'Partial refund', tone: 'partial' },
-  [OUTCOME.FULL_REFUND]: { label: 'Full refund', stamp: 'Full refund', tone: 'refund' },
+  [OUTCOME.PARTIAL_REFUND]: { label: 'Partial refund', stamp: 'Partial refund', tone: 'contested' },
+  [OUTCOME.FULL_REFUND]: { label: 'Full refund', stamp: 'Full refund', tone: 'contested' },
   [OUTCOME.UNDETERMINED]: { label: 'Undetermined', stamp: 'Undetermined', tone: 'neutral' },
 };
 

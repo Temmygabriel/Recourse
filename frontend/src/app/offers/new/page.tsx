@@ -194,7 +194,7 @@ export default function NewOfferPage() {
               onChange={(e) => setPromise(e.target.value)}
             />
             {promise.trim() === '' && promise !== '' && (
-              <p className="hint mt-1 text-refund">A promise of only spaces is not a promise.</p>
+              <p className="hint mt-1 text-contested">A promise of only spaces is not a promise.</p>
             )}
           </DocBody>
         </DocCard>

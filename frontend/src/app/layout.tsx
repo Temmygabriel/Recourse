@@ -30,6 +30,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 people can share one. Nothing here is a reputation score.
               </p>
             </div>
+            {/* The other half of the page frame, matching the band at the top of
+                the header. Once per page, never per card. */}
+            <div className="security-band" />
           </footer>
         </WalletProvider>
       </body>

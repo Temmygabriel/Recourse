@@ -131,15 +131,21 @@ export default function OfferPage() {
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
         {/* --- The document ------------------------------------------------ */}
         <div className="flex min-w-0 flex-col gap-5">
+          {/*
+            The promise gets more room than anything else on the page (design
+            direction §6.3). It is the object the buyer is agreeing to and the
+            text a dispute is read against, so it is the one card here that is
+            allowed to take up space — see the padding on the body below.
+          */}
           <DocCard>
             <DocHead
               title="What was promised"
               aside={<span>{purchase.criteriaCount} requirements</span>}
             />
-            <DocBody>
+            <DocBody className="py-6 sm:px-7">
               <Verbatim text={purchase.promiseText} />
 
-              <div className="mt-4">
+              <div className="mt-5">
                 <RequirementList
                   rubric={purchase.rubric}
                   caption="A dispute can only be about these"
@@ -210,8 +216,16 @@ export default function OfferPage() {
         <aside className="flex min-w-0 flex-col gap-4">
           <DocCard>
             <DocBody>
-              <p className="amount">{formatUsdc(purchase.price)}</p>
-              <div className="mt-3">
+              <p className="stub-label">
+                {purchase.stage === STAGE.OPEN
+                  ? 'Asking price'
+                  : purchase.stage === STAGE.SETTLED
+                    ? 'Price paid'
+                    : 'Held in escrow'}
+              </p>
+              <p className="amount mt-1">{formatUsdc(purchase.price)}</p>
+              <div className="stub-rule" />
+              <div className="mt-2">
                 <Field label="Seller">
                   <AddressLink address={purchase.seller} />
                 </Field>

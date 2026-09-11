@@ -18,11 +18,13 @@ Work log, newest first. For durable decisions and constraints see
 | Judgment logic tests | 🟢 **passing locally** (11/11) |
 | Cross-language hash vectors | 🟢 done and locked from both sides |
 | Relayer | 🟢 written; **30/30 pure-logic tests passing locally**; SDK surface verified against the published package |
-| Frontend (7 screens) | 🟡 **8 routes written**; never typechecked or built — Vercel will be the first compiler |
+| Frontend (7 screens) | 🟢 **8 routes typecheck clean (`tsc --noEmit` exit 0) AND build (`next build` exit 0)** — verified locally 2026-09-11 |
 | CI (GitHub Actions) | ⚠️ file written, **cannot push** — token lacks `workflow` scope |
-| README / security narrative | 🟡 partly written |
+| README / security narrative | 🟡 README done; `docs/SECURITY.md` and `docs/DEPLOY.md` still missing |
 | GitHub push wired up | 🟢 working (code pushes fine; only `.github/workflows/` is blocked) |
-| Vercel deploy | 🔴 not started |
+| Vercel deploy | 🟡 **build-verified locally; not yet deployed** — see the Vercel readiness note below |
+| GenLayer deploy (Bradbury) | 🔴 **blocked by network, not by code** — see Session 8 |
+| Base escrow deploy | 🔴 not started (waits on the GenLayer address — `sourceContract` is immutable) |
 
 Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 
@@ -45,11 +47,114 @@ Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 > state store — runs locally with no dependencies and no network (30 tests). The
 > parts that do touch a chain are unverified until a deploy exists.
 >
-> **Nothing has run in a browser.** All eight frontend routes are written and
-> read, but the frontend has never been through `tsc` or `next build`, because
-> this machine cannot run either and CI is blocked. Every claim about the UI in
-> the sessions below is a claim about source that has been reviewed, not
-> executed.
+> **The frontend has now been compiled.** As of Session 8 both `npx tsc --noEmit`
+> and `npx next build` exit 0 against the locked dependency versions, producing
+> all nine routes. The old caveat — "Vercel will be the first compiler" — is
+> retired. It was run in a scratch copy outside the repo (`%TEMP%\recourse-tsc`)
+> because this machine is 8 GB and the user asked for heavy compute to stay off
+> it, but the source compiled is byte-identical to the repo's. See the Vercel
+> readiness note in Session 8 for what is still unproven.
+>
+> **The GenLayer deploy is blocked by the network, not by the contract.**
+> Session 8 diagnosed this precisely: Bradbury's RPC load-balances across nodes
+> with inconsistent mempool views, so the same transaction hash returns `null`
+> from one poll and a transaction object from the next. Two deploy attempts were
+> accepted and then never finalized. **No GenLayer contract address exists yet**,
+> which blocks the Base escrow deploy behind it.
+
+---
+
+## 2026-09-11 — Session 8
+
+### Done
+
+- **Implemented the whole security-paper design direction**
+  (`recourse_design_direction_security_paper.md`, §2–§7). Token swap, the
+  security band, solid ink primary buttons, filled requirement circles, the
+  three inline SVG icons, the home hero, the stage-coded purchase rows, the
+  payment-stub price panel, the dashed exhibits, and the dispute bond strip.
+  Nothing in §1–§8 is left unbuilt.
+- **Compiled the frontend for the first time.** `npx tsc --noEmit` exit 0 and
+  `npx next build` exit 0 — nine routes, 103 kB shared JS, `/` at 209 kB First
+  Load. Run twice: once before the requirement-circle changes and once after.
+- **Ran the money-rails checklist** from `genlayer-known-money-rails-issues.md`
+  against Recourse. Recorded in [docs/MONEY_RAILS_AUDIT.md](./docs/MONEY_RAILS_AUDIT.md).
+- **Diagnosed the GenLayer deploy blockage to root cause.** Details below.
+
+### The GenLayer deploy — what is actually wrong
+
+Not a contract bug, and not the transient socket noise earlier sessions blamed.
+It is two separate conditions that compounded:
+
+1. **A stranded transaction.** An earlier deploy (`0x139c9ed1…823e`) is still
+   sitting in Bradbury's mempool at nonce 284, never mined. It bid
+   **0.1732 gwei**. The network's current price is **0.1568 gwei** — *lower*.
+   Because the GenLayer CLI has **no gas-price flag** (checked: `deploy --help`
+   offers only `--contract`, `--rpc`, `--args`), every retry bids the current
+   network price, which is below the stranded tx, and is rejected with
+   `insufficient gas price to replace existing transaction`. Retrying can never
+   succeed while the network price sits under 0.1732 gwei.
+2. **An RPC that disagrees with itself.** `rpc-bradbury.genlayer.com`
+   load-balances across backend nodes whose mempools are not synchronised.
+   Polling the *same hash* three times returned `null`, `null`, then a
+   transaction object. So "is my transaction in the pool?" has no single
+   answer at this endpoint, and the CLI's `WaitForTransactionReceipt` races
+   a pool whose contents depend on which node answers.
+
+The second attempt (`0x85d9dc21…3834`) got past the gas-price gate — the
+stranded tx had evidently been evicted — was accepted, and then timed out
+waiting for confirmation. It is now `null` on the nodes the RPC is currently
+routing to.
+
+**Consequence: the account nonce is stuck at 284 and no GenLayer contract
+exists.** `sourceContract` on the escrow is immutable and constructor-only, so
+the Base escrow deploy cannot proceed until a GenLayer address exists. This is
+the critical path for the whole submission.
+
+### Vercel readiness
+
+The user asked to be told when the project is ready to deploy to Vercel.
+**The frontend is ready and verified**: `next build` exits 0 with the exact
+dependency versions in `package-lock.json`, and the two type errors that broke
+the previous Vercel build (`escrow.ts:193` and the hidden `escrow.ts:220`) are
+fixed and confirmed gone.
+
+What is **not** ready is everything the deployed app would talk to. The pages
+will load on Vercel, but every one of them reads from `NEXT_PUBLIC_ESCROW_ADDRESS`
+and there is no escrow deployed. A deployment now produces a site that renders
+its empty state on every route. That is worth doing only once the addresses
+exist — not because the build would fail, but because a live URL that shows
+nothing is worse evidence than no URL.
+
+### Caught and fixed
+
+- **A fabricated file path in the README.** The key blast-radius table listed
+  the GenLayer deployer key as living in `.secrets/genlayer.json`. That file
+  does not exist and never did — I wrote the row by inference instead of
+  checking. The key is actually in the **GenLayer CLI's own keystore at
+  `~/.genlayer/keystores/default.json`**, outside the repository entirely.
+  Corrected, and the surrounding paragraph with it.
+- **Verified the secrets really are ignored**, rather than trusting the
+  README's claim: `git check-ignore -v` confirms `.secrets/` is matched by
+  `.gitignore:2`, and `git ls-files` confirms the only tracked `.env` files are
+  the two `.env.example` templates.
+- **Two design-direction consistency fixes** where the doc's intent and its
+  literal text disagreed: the unmarked requirement circle was sage-hairlined
+  rather than ink-outlined as §5 specifies, and dispute selection still used
+  the accent navy for its row wash while the circle above it filled burgundy.
+  Both moved to the colours §5/§6.5 actually call for.
+
+### Next
+
+1. **Unblock the GenLayer deploy** — the single critical-path item. Options:
+   wait for the network gas price to rise above 0.1732 gwei and retry; create a
+   fresh GenLayer account and fund it from a faucet (the stranded nonce does not
+   follow a new account); or supply the CLI keystore password so the tx can be
+   replaced directly at nonce 284 with a higher bid.
+2. Deploy the Base escrow with the GenLayer address and chain id once it exists.
+3. Write `docs/SECURITY.md` and `docs/DEPLOY.md` — both are referenced by
+   `MEMORY.md`, `DATA_MODEL.md` and the README and neither exists yet.
+4. Add the escrow reconciliation check flagged in `docs/MONEY_RAILS_AUDIT.md`.
 
 ---
 
