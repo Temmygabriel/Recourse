@@ -20,7 +20,8 @@ Work log, newest first. For durable decisions and constraints see
 | Relayer | 🟢 written; **30/30 pure-logic tests passing locally**; SDK surface verified against the published package |
 | Frontend (7 screens) | 🟢 **8 routes typecheck clean (`tsc --noEmit` exit 0) AND build (`next build` exit 0)** — verified locally 2026-09-11 |
 | CI (GitHub Actions) | ⚠️ file written, **cannot push** — token lacks `workflow` scope |
-| README / security narrative | 🟡 README done; `docs/SECURITY.md` and `docs/DEPLOY.md` still missing |
+| README / security narrative | 🟢 README, `docs/SECURITY.md`, `docs/DEPLOY.md` all written — every cross-link resolves |
+| docs/MONEY_RAILS_AUDIT.md | 🟢 written — Issues 1–3 clean, Issue 4 flagged unmeasured |
 | GitHub push wired up | 🟢 working (code pushes fine; only `.github/workflows/` is blocked) |
 | Vercel deploy | 🟡 **build-verified locally; not yet deployed** — see the Vercel readiness note below |
 | GenLayer deploy (Bradbury) | 🔴 **blocked by network, not by code** — see Session 8 |
@@ -77,6 +78,12 @@ Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 - **Compiled the frontend for the first time.** `npx tsc --noEmit` exit 0 and
   `npx next build` exit 0 — nine routes, 103 kB shared JS, `/` at 209 kB First
   Load. Run twice: once before the requirement-circle changes and once after.
+- **Wrote `docs/SECURITY.md` and `docs/DEPLOY.md`** — both were linked from
+  `MEMORY.md`, `DATA_MODEL.md` and the README and neither existed, so the
+  submission had dead links pointing at its own security narrative. SECURITY.md
+  carries the 16 settlement checks, the payout rule, the key blast-radius table
+  and a "known gaps" section; DEPLOY.md is the ordered runbook, including the
+  GenLayer blocker above so the next person does not re-diagnose it.
 - **Ran the money-rails checklist** from `genlayer-known-money-rails-issues.md`
   against Recourse. Recorded in [docs/MONEY_RAILS_AUDIT.md](./docs/MONEY_RAILS_AUDIT.md).
 - **Diagnosed the GenLayer deploy blockage to root cause.** Details below.
@@ -152,9 +159,9 @@ nothing is worse evidence than no URL.
    follow a new account); or supply the CLI keystore password so the tx can be
    replaced directly at nonce 284 with a higher bid.
 2. Deploy the Base escrow with the GenLayer address and chain id once it exists.
-3. Write `docs/SECURITY.md` and `docs/DEPLOY.md` — both are referenced by
-   `MEMORY.md`, `DATA_MODEL.md` and the README and neither exists yet.
-4. Add the escrow reconciliation check flagged in `docs/MONEY_RAILS_AUDIT.md`.
+3. Add the escrow reconciliation check flagged in `docs/MONEY_RAILS_AUDIT.md` —
+   the one real gap the security review surfaced.
+4. Grant the `workflow` scope so CI can run (`gh auth refresh -s workflow`).
 
 ---
 
