@@ -265,22 +265,34 @@ docs/        DATA_MODEL.md, SECURITY.md, DEPLOY.md
      bundle — it structurally could not target the network the migration doc
      requires. The `rc` dist-tag (`0.40.0-rc.3`) is the "matching RC" the doc
      means. Upgraded 2026-09-11. **Re-check this after any `npm i -g genlayer`.**
-  2. **studio-dev is fee-charging but EVM-gasless.** `eth_gasPrice` is literally
-     `0x0` and the account's balance is `0`, which is expected — but a deploy
-     without a fee reverts `FeeValueMustBeNonZero(1)`. It needs
-     `--fee-value <wei>`, and the naive `estimate-fees` path is dead there
-     (`sim_getFeeConfig: Method not found`, `gen_dbg_traceTransaction: Method
-     not found` — the public RPC is stripped down). A fee profile is meant to
-     come from `gltest --fee-profile`, which is **not installed**.
-  3. **studio-dev currently activates no validators.** Every deploy attempt ends
-     `status: FINALIZED`, `result_name: 'NO_MAJORITY'`, `num_of_rounds: '0'`,
-     `votes_committed: '0'`, with `activator` and `last_leader` both empty. A
-     300-block scan found exactly **one** non-empty block — our own tx. The
-     identical contract, with an identical fee, deployed on **studionet** in the
-     same session with `MAJORITY_AGREE`, 5 validators, 5 votes revealed, and a
-     live `activator`. **So the contract is good and studio-dev is not
-     validating.** A larger fee (0.01 GEN) changed nothing, which rules the fee
-     out as the cause of `NO_MAJORITY`.
+  2. **studio-dev is gasless for EVM gas but NOT for the consensus fee — and the
+     account must hold GEN.** `eth_gasPrice` is `0x0` and `effectiveGasPrice`
+     came back `0x0` on a transaction that succeeded, so gas really is free.
+     That is what made "studio-dev needs no faucet" look true, and **it is
+     false**: the GenLayer fee deposit is paid from a real balance. Measured
+     2026-09-11 — the CLI keystore account `0xa881365a…466d` holds **0 GEN** and
+     every deploy from it ends `NO_MAJORITY` with **no activator**; the account
+     that succeeded, `0x81D6bF84…93f4`, holds **48.6 GEN** and its transaction
+     returned `status: 0x1`. A deploy with no fee reverts
+     `FeeValueMustBeNonZero(1)`, and with a zero balance the fee cannot be paid
+     at all, so the fee *amount* makes no difference (1 wei and 0.01 GEN behave
+     identically). `estimate-fees` cannot help: the public RPC has no
+     `sim_getFeeConfig` and no `gen_dbg_traceTransaction`. **Fix: fund
+     `0xa881365a99d77be904e414ae610e22938bb0466d` with GEN on studio-dev.**
+  3. **studio-dev activates no validator for an unfundable transaction.** Every
+     attempt ends `status: FINALIZED`, `result_name: 'NO_MAJORITY'`,
+     `num_of_rounds: '0'`, `votes_committed: '0'`, with `activator` and
+     `last_leader` both empty. **This is a symptom of (2), not a separate
+     fault** — the earlier reading of it as "studio-dev is not validating" was
+     wrong, and the network is fine: a funded account transacted successfully
+     on it in the same window. A 300-block scan finding only our own
+     transactions is explained by the network being nearly idle, not broken.
+  3b. **The contract is NOT the problem — proven with a control.** A 12-line
+     trivial contract carrying the same `Depends` header fails *identically*
+     from our account. So neither `recourse_judgment.py`, its `Depends` header,
+     nor GenVM contract loading is implicated. Anyone debugging this again
+     should reach for that control first; it kills the most expensive
+     hypothesis in one deploy.
   4. **The Bradbury block is arithmetic, not a mystery.** The stranded tx at
      nonce 284 bid 0.17322855 gwei. Replacement needs a **10% bump**
      (0.1906 gwei) and the network only suggests 0.1875 gwei — it misses by
