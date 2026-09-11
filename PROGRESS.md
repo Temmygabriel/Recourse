@@ -24,7 +24,7 @@ Work log, newest first. For durable decisions and constraints see
 | docs/MONEY_RAILS_AUDIT.md | 🟢 written — Issues 1–2 clean, Issue 3's gap closed by `totalHeld()`, Issue 4 still flagged unmeasured |
 | GitHub push wired up | 🟢 working (code pushes fine; only `.github/workflows/` is blocked) |
 | Vercel deploy | 🟡 **build-verified locally; not yet deployed** — see the Vercel readiness note below |
-| GenLayer deploy (Bradbury) | 🔴 **blocked by network, not by code** — see Session 8 |
+| GenLayer deploy (studio-dev 61997) | 🔴 **blocked by the network, not by code** — no validator activates the tx; the same contract deploys fine on studionet |
 | Base escrow deploy | 🔴 not started (waits on the GenLayer address — `sourceContract` is immutable) |
 
 Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
@@ -95,13 +95,56 @@ documents honest about it.
   no caller.** Nothing watches it on a live deployment, so the gap is closed for
   a person checking and still open for a machine watching.
 
+### The GenLayer deploy — what actually happened
+
+Session 8 left this "blocked by Bradbury". It was more than that, and this
+session found four separate faults stacked on each other.
+
+1. **The CLI was too old to target the required network.** The installed CLI was
+   **0.37.1**, whose bundle contains **zero** occurrences of
+   `studio-dev`/`studioDevnet`/`61997`. The migration doc says to use the CLI
+   `studio-dev` alias *"supplied by the matching RC"* — the `rc` dist-tag is
+   `0.40.0-rc.3`. Upgraded; it now knows the network and the fee flags.
+   This was the real root cause, and nothing before it was diagnosable.
+2. **studio-dev is fee-charging even though it is EVM-gasless.** `eth_gasPrice`
+   is `0x0` and the account balance is `0` — the zero balance is *expected*, not
+   a missing faucet. But an unfunded deploy reverts `FeeValueMustBeNonZero(1)`.
+   `estimate-fees` cannot help: studio-dev's public RPC has no
+   `sim_getFeeConfig` and no `gen_dbg_traceTransaction`. Passing a fee value and
+   a distribution clears that error.
+3. **studio-dev activates no validators.** With the fee error cleared, every
+   attempt ends the same way: `status: FINALIZED`, `result_name: 'NO_MAJORITY'`,
+   `num_of_rounds: '0'`, `votes_committed: '0'`, `activator: ''`,
+   `last_leader: ''`. A 300-block scan found exactly **one** non-empty block —
+   our own transaction. Raising the fee to 0.01 GEN changed nothing.
+4. **Bradbury's block is arithmetic.** The stranded tx at nonce 284 bid
+   0.17322855 gwei; replacing it needs a 10% bump (0.1906 gwei) and the network
+   suggests only 0.1875 gwei. It misses by ~1.6%, and the CLI has no gas-price
+   flag. Its RPC also load-balances across nodes with unsynchronised mempools.
+
+**The control that makes this diagnosable:** the *identical* contract, with the
+*identical* fee, deployed on **studionet** in this same session —
+`MAJORITY_AGREE`, 5 validators, 5 votes revealed, a live activator, contract at
+`0x3bb55747305282DBDbD6baC4215f4796b0Bc12C6`.
+
+That address is on the wrong chain and does not satisfy the submission. It is
+recorded here only as evidence: it proves the contract, its `Depends` header and
+its fee path are all sound, and it isolates the studio-dev failure to the
+network rather than to anything in this repository.
+
+**The Base escrow is still not deployed**, and still cannot be — `sourceContract`
+is immutable. No amount of work on the escrow side unblocks it.
+
 ### Not done
 
-- The GenLayer deploy is still blocked exactly as Session 8 left it. A background
-  poll for the receipt of `0x07959f67…4047f6` ran for ~20 minutes and produced
-  nothing, which is consistent with the load-balanced-mempool diagnosis rather
-  than a new fault: the transaction was accepted by one node and no node the
-  poller reached had it. No new information, no new action.
+- The judgment contract is still undeployed **on studio-dev**, pending that
+  network activating validators. This is the only thing standing between the
+  repo and an end-to-end demo, and it is not fixable from this side.
+- `docs/DEPLOY.md` §2 now leads with the CLI version check
+  (`0.40.0-rc.3`, not `0.37.1`), the mandatory `--fee-value`, and the evidence
+  that the studio-dev failure is network-side — including the studionet control
+  address. Bradbury's arithmetic dead end is kept as a separate subsection so
+  the two faults are not confused again.
 - `docs/DEPLOY.md` §7 now carries the reconciliation read as a post-deploy
   check, with the note to run it *mid-dispute* — the state where the escrow
   holds both a price and a bond is the one where a leak would actually show.

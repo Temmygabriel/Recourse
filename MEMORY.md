@@ -173,7 +173,8 @@ starts failing on gas, that is the wallet to top up, not the deployer.
 |:--|:--|
 | Base Sepolia USDC | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 | RecourseEscrow (Base Sepolia) | _not yet deployed_ |
-| GenLayer judgment contract | _not yet deployed_ |
+| GenLayer judgment contract (studio-dev 61997) | _deploy blocked — see CRITICAL PATH; no validator activates_ |
+| GenLayer judgment contract (studionet 61999) | `0x3bb55747305282DBDbD6baC4215f4796b0Bc12C6` — **wrong chain for the submission**, kept only as proof the contract deploys |
 
 ---
 
@@ -254,26 +255,45 @@ docs/        DATA_MODEL.md, SECURITY.md, DEPLOY.md
   of the repo; the source compiled is byte-identical to the repo's. Vercel is no
   longer the first compiler. It is still the first *host*, so a deploy remains
   the real proof.
-- **CRITICAL PATH — the GenLayer deploy is blocked by Bradbury, not by code.**
-  No GenLayer contract address exists, and `sourceContract` on the escrow is
-  immutable, so the Base escrow deploy cannot start until one does.
-  Two independent faults, both confirmed by measurement on 2026-09-11:
-  1. A stranded deploy (`0x139c9ed1…823e`, nonce 284) sits unmined in the pool
-     having bid **0.1732 gwei**, while the network price is **0.1568 gwei**.
-     The CLI has **no gas-price flag** (`deploy` accepts only `--contract`,
-     `--rpc`, `--args`), so every retry bids below the stranded tx and is
-     rejected: `insufficient gas price to replace existing transaction`.
-     **Retrying cannot succeed while the network price is under 0.1732 gwei.**
-  2. `rpc-bradbury.genlayer.com` **load-balances across nodes with
-     unsynchronised mempools**. Polling one hash three times returned
-     `null`, `null`, `FOUND`. So pool membership has no single answer at this
-     endpoint, and the CLI's receipt wait races whichever node answers.
-  Ways out: wait for the gas price to rise above 0.1732 and retry; create a
-  **fresh** GenLayer account (a new account does not inherit the stranded
-  nonce) and fund it from a faucet; or get the CLI keystore password from the
-  user to replace the tx at nonce 284 with a higher bid. The keystore is
-  `~/.genlayer/keystores/default.json` — scrypt v3, password-held, so it cannot
-  be read without the user.
+- **CRITICAL PATH — the GenLayer deploy is blocked by the *network*, not by code,
+  and the CLI version was the first real defect.** Established by measurement on
+  2026-09-11. `sourceContract` on the escrow is immutable, so the Base escrow
+  deploy cannot start until a judgment contract address exists.
+
+  1. **The GenLayer CLI MUST be `0.40.0-rc.3`, not 0.37.1.** The installed CLI
+     had **zero** occurrences of `studio-dev`/`studioDevnet`/`61997` in its
+     bundle — it structurally could not target the network the migration doc
+     requires. The `rc` dist-tag (`0.40.0-rc.3`) is the "matching RC" the doc
+     means. Upgraded 2026-09-11. **Re-check this after any `npm i -g genlayer`.**
+  2. **studio-dev is fee-charging but EVM-gasless.** `eth_gasPrice` is literally
+     `0x0` and the account's balance is `0`, which is expected — but a deploy
+     without a fee reverts `FeeValueMustBeNonZero(1)`. It needs
+     `--fee-value <wei>`, and the naive `estimate-fees` path is dead there
+     (`sim_getFeeConfig: Method not found`, `gen_dbg_traceTransaction: Method
+     not found` — the public RPC is stripped down). A fee profile is meant to
+     come from `gltest --fee-profile`, which is **not installed**.
+  3. **studio-dev currently activates no validators.** Every deploy attempt ends
+     `status: FINALIZED`, `result_name: 'NO_MAJORITY'`, `num_of_rounds: '0'`,
+     `votes_committed: '0'`, with `activator` and `last_leader` both empty. A
+     300-block scan found exactly **one** non-empty block — our own tx. The
+     identical contract, with an identical fee, deployed on **studionet** in the
+     same session with `MAJORITY_AGREE`, 5 validators, 5 votes revealed, and a
+     live `activator`. **So the contract is good and studio-dev is not
+     validating.** A larger fee (0.01 GEN) changed nothing, which rules the fee
+     out as the cause of `NO_MAJORITY`.
+  4. **The Bradbury block is arithmetic, not a mystery.** The stranded tx at
+     nonce 284 bid 0.17322855 gwei. Replacement needs a **10% bump**
+     (0.1906 gwei) and the network only suggests 0.1875 gwei — it misses by
+     ~1.6% and the CLI exposes no gas-price flag. Separately, that RPC
+     **load-balances across nodes with unsynchronised mempools**: one hash
+     polled three times returned `null`, `null`, `FOUND`.
+
+  **Deploy-proven:** the judgment contract *does* deploy. On studionet (61999) it
+  reached `MAJORITY_AGREE` at **`0x3bb55747305282DBDbD6baC4215f4796b0Bc12C6`**.
+  That address is on the wrong chain for the submission, but it is hard evidence
+  that the contract, its `Depends` header and its fee path are all sound — and
+  it means the remaining studio-dev failure has a known-good control to compare
+  against.
 - **Issue 4 from `genlayer-known-money-rails-issues.md` is unmeasured for us.**
   Bradbury rejects deploys whose **compiled artifact** exceeds ~39,869 B.
   `recourse_judgment.py` is 21,296 B of *source*; the artifact size is what

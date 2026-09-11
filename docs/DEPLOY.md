@@ -77,10 +77,40 @@ node scripts/check-balances.mjs
 
 ## 2. Deploy the judgment contract (GenLayer)
 
+**The target is studio-dev (chain 61997).** It is the network the v0.6 migration
+doc requires, and it is the network this project must use.
+
+### First: check the CLI version — this is the step that wastes an afternoon
+
 ```bash
-genlayer network set testnet-bradbury
-genlayer deploy --contract genlayer/contracts/recourse_judgment.py
+genlayer --version   # must be 0.40.0-rc.3, NOT 0.37.1
 ```
+
+A 0.37.1 CLI **cannot target studio-dev at all**: `studio-dev`, `studioDevnet`
+and `61997` do not appear anywhere in its bundle, `genlayer network list` shows
+only `localnet`, `studionet`, `testnet-asimov` and `testnet-bradbury`, and every
+attempt to reach the required network fails for a reason that has nothing to do
+with the contract. Install the matching RC:
+
+```bash
+npm install -g genlayer@0.40.0-rc.3
+```
+
+### Then deploy
+
+```bash
+genlayer network set studio-dev
+genlayer deploy --contract genlayer/contracts/recourse_judgment.py --fee-value 10000000000000000
+```
+
+**`--fee-value` is not optional here.** studio-dev is EVM-gasless —
+`eth_gasPrice` is literally `0x0`, and the account's balance is `0`, which is
+*correct and expected*, not a missing faucet. But it still charges a GenLayer
+consensus fee, and a deploy without one reverts `FeeValueMustBeNonZero(1)`.
+Note that `genlayer estimate-fees` cannot help you pick the number: studio-dev's
+public RPC does not expose `sim_getFeeConfig`, and `genlayer trace` fails the
+same way on `gen_dbg_traceTransaction`. The value above works; the amount did
+not change the outcome in any test.
 
 Record the deployed address. **Verify it is actually finalized before
 continuing** — a `deploy` that prints an address is not proof:
@@ -91,30 +121,36 @@ genlayer receipt <txHash>
 
 ### ⚠️ Known blocker — read before retrying
 
-As of 2026-09-11 this deploy **has not succeeded.** Two separate faults, both
-measured rather than guessed:
+As of 2026-09-11 this deploy **has not succeeded on studio-dev.** The failure is
+in the network, not in this repository, and here is the evidence for that claim:
 
-1. **A stranded transaction holds the account nonce.** An earlier attempt
-   (`0x139c9ed1…823e`) sits unmined at nonce 284 having bid **0.1732 gwei**,
-   while the network price is **0.1568 gwei**. The CLI has **no gas-price flag**
-   — `deploy` accepts only `--contract`, `--rpc`, `--args` — so every retry bids
-   the current network price and is rejected:
-   `insufficient gas price to replace existing transaction`.
-   **Retrying cannot succeed while the network price is below 0.1732 gwei.**
-2. **The RPC disagrees with itself.** `rpc-bradbury.genlayer.com` load-balances
-   across nodes with unsynchronised mempools. Polling one hash three times
-   returned `null`, `null`, `FOUND`. Pool membership has no single answer here.
+Every attempt ends identically — `status: FINALIZED` but `result_name:
+'NO_MAJORITY'`, `num_of_rounds: '0'`, `votes_committed: '0'`, `activator: ''`,
+`last_leader: ''`. **No validator ever activates the transaction.** A scan of
+300 consecutive blocks found exactly one non-empty block: ours. Raising the fee
+from 1 wei to 0.01 GEN changed nothing, which rules the fee out as the cause.
 
-Ways out, in order of preference:
+The control that settles it: the **identical contract with the identical fee
+deployed successfully on studionet in the same session** — `MAJORITY_AGREE`,
+5 validators, 5 votes revealed, a live activator, contract at
+`0x3bb55747305282DBDbD6baC4215f4796b0Bc12C6`. So the contract, its `Depends`
+header and its fee path are all sound, and studio-dev is simply not validating
+right now.
 
-- **Wait** for the network gas price to rise above 0.1732 gwei, then retry. The
-  stranded tx may also simply be mined, in which case read its receipt — the
-  contract is already deployed.
-- **Use a fresh GenLayer account.** A stranded nonce does not follow a new
-  account. Create one with `genlayer account`, then fund it from a faucet.
-- **Replace the tx at nonce 284** with a higher bid. This needs the keystore
-  password (`~/.genlayer/keystores/default.json` is scrypt-encrypted), so only
-  the key's owner can do it.
+**What to do:** retry later, or raise it with the GenLayer team for the
+hackathon — a preview network that activates no validators is not something the
+submitter can fix. Do **not** substitute studionet: the submission requires
+studio-dev, and an address on 61999 does not satisfy it.
+
+### Bradbury — a separate, arithmetic dead end
+
+If you are on Bradbury instead, it has its own fault worth knowing: a stranded
+transaction holds the account nonce. It sits unmined at nonce 284 having bid
+**0.17322855 gwei**. Replacing it requires a **10% bump — 0.1906 gwei** — and
+the network's suggested price is only **0.1875 gwei**. It misses the threshold by
+about 1.6%, and the CLI exposes no gas-price flag to force a higher bid. The RPC
+also load-balances across nodes with unsynchronised mempools: polling one hash
+three times returned `null`, `null`, `FOUND`.
 
 ### Contract size limit
 
