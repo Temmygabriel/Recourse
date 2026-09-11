@@ -31,10 +31,17 @@ The account that already works is `0x81D6bF84a5b03950d910b4a2F83C68006E0b93f4`
 2. Paste `genlayer/contracts/gen_sender.py` into the Studio's contract editor.
 3. Deploy it, signing with the **funded** account (`0x81D6bF84…`).
 
-> **If the Studio rejects the `Depends` header**, replace the first line with
-> whatever the Studio's own "new contract" template puts there. The header pins
-> a py-genlayer build; the Studio knows which build it is running and you do
-> not. Nothing else in the file depends on it.
+> **No `Depends` header.** The contract deliberately carries none. The Studio
+> supplies the runner when you deploy through it, and a header copied from this
+> repo pins a py-genlayer build that studio-dev may not be running — which is a
+> schema-load failure, not a runtime one. If your Studio template adds its own
+> `# { "Depends": ... }` line, keep theirs.
+
+> **`emit_transfer(value=v)`, never `value=u256(v)`.** The official GenLayer
+> faucet example passes `gl.message.value` straight through. `u256` is **not**
+> exported by `from genlayer import *`, so writing it produces
+> `Could not load contract schema` — a confusing error for what is really an
+> unresolved name.
 
 ---
 
