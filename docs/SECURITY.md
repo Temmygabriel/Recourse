@@ -181,11 +181,13 @@ of range, or internally contradictory is repaired or rejected there.
 
 Listed because a security document that only lists strengths is marketing.
 
-1. **No reconciliation view.** Nothing compares the escrow's actual USDC balance
-   against what its own accounting says it should hold. On Base this is a plain
-   `balanceOf(escrow)` call, and it is not exposed. If the escrow ever retained
-   value it should not have — via a revert or a transfer quirk — nothing would
-   surface it. Flagged in `docs/MONEY_RAILS_AUDIT.md`.
+1. ~~**No reconciliation view.**~~ **Closed 2026-09-11.** `RecourseEscrow.totalHeld()`
+   returns what the contract's books say it holds; compare it against
+   `usdc.balanceOf(escrow)`. A surplus would mean value arrived with no ledger
+   entry. Covered by 10 tests asserting the two agree through the whole
+   lifecycle, including after a release and after a refund. What remains is that
+   **nothing calls it automatically** — it is a view, and someone has to look.
+   A monitoring job that alerts on a mismatch is still not written.
 2. **The relayer is unverified against a live deployment.** Its pure logic is
    covered by 30 local tests, including the coherence check that must agree with
    Solidity. Everything that touches a chain is untested until a deploy exists.

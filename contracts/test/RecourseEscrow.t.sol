@@ -1637,6 +1637,112 @@ contract RecourseEscrowTest is Test {
     }
 
     // =====================================================================
+    // Reconciliation — totalHeld() against the real token balance
+    // =====================================================================
+
+    /// @dev The invariant this whole section exists for: what the escrow's
+    ///      books say it holds must equal what it actually holds. A surplus
+    ///      would mean value arrived without a ledger entry — the retained-value
+    ///      failure mode described in docs/MONEY_RAILS_AUDIT.md.
+    function _assertReconciled(string memory at) internal view {
+        assertEq(
+            usdc.balanceOf(address(escrow)),
+            escrow.totalHeld(),
+            string.concat("escrow balance and ledger disagree at: ", at)
+        );
+    }
+
+    function test_TotalHeld_ZeroBeforeAnything() public view {
+        assertEq(escrow.totalHeld(), 0, "a fresh escrow holds nothing");
+        _assertReconciled("fresh deploy");
+    }
+
+    function test_TotalHeld_IgnoresUnpaidOffers() public {
+        _offer();
+        assertEq(escrow.totalHeld(), 0, "an open offer has not been paid for");
+        _assertReconciled("after offer");
+    }
+
+    function test_TotalHeld_CountsThePriceOnceFunded() public {
+        _funded();
+        assertEq(escrow.totalHeld(), PRICE, "the funded price is held");
+        _assertReconciled("after purchase");
+    }
+
+    function test_TotalHeld_StillCountsThePriceOnceDelivered() public {
+        _delivered();
+        assertEq(escrow.totalHeld(), PRICE, "delivery moves no money");
+        _assertReconciled("after delivery");
+    }
+
+    function test_TotalHeld_AddsTheBondOnceDisputed() public {
+        _disputed();
+        uint256 bond = escrow.disputeBond(PRICE);
+        assertEq(bond, (uint256(PRICE) * BOND_BPS) / 10_000, "bond is 5% of price");
+        assertEq(escrow.totalHeld(), PRICE + bond, "the bond is held on top of the price");
+        _assertReconciled("after dispute");
+    }
+
+    function test_TotalHeld_ZeroAfterSettlement() public {
+        uint256 id = _disputed();
+        _settle(_cleanRelease(id));
+
+        assertEq(escrow.totalHeld(), 0, "a settled purchase holds nothing");
+        _assertReconciled("after settlement");
+    }
+
+    /// @dev The case a surplus would actually show up in. A settled purchase
+    ///      pays out both the price and the bond, so this is where an accounting
+    ///      slip would leave the escrow holding more than it admits to.
+    function test_TotalHeld_ZeroAfterRefundSettlement() public {
+        uint256 id = _disputed();
+        _settle(_decision(id, RecourseEscrow.Outcome.FULL_REFUND, 10_000, 0x0));
+
+        assertEq(escrow.totalHeld(), 0, "a refunded purchase holds nothing");
+        _assertReconciled("after full refund");
+    }
+
+    /// @dev Several purchases at different stages at once, so the sum has to be
+    ///      right rather than the two cases that happen to coincide.
+    function test_TotalHeld_SumsAcrossMixedStages() public {
+        _offer(); // OPEN — contributes nothing
+        _funded(); // FUNDED — price only
+        uint256 disputed = _disputed(); // DISPUTED — price + bond
+
+        uint256 bond = escrow.disputeBond(PRICE);
+        assertEq(escrow.totalHeld(), PRICE * 2 + bond, "mixed stages sum correctly");
+        _assertReconciled("three purchases, three stages");
+
+        _settle(_cleanRelease(disputed));
+        assertEq(escrow.totalHeld(), PRICE, "only the funded purchase remains held");
+        _assertReconciled("after settling the disputed one");
+    }
+
+    /// @dev A cancelled offer was never paid for, so it must not be counted.
+    function test_TotalHeld_IgnoresCancelledOffers() public {
+        uint256 id = _offer();
+        vm.prank(seller);
+        escrow.cancelOffer(id);
+
+        assertEq(escrow.totalHeld(), 0, "a cancelled offer holds nothing");
+        _assertReconciled("after cancel");
+    }
+
+    /// @dev The deadline-refund path returns the price without a dispute, so the
+    ///      ledger has to drop it. This is the one exit that does not go through
+    ///      `settle`.
+    function test_TotalHeld_ZeroAfterDeadlineRefund() public {
+        uint256 id = _funded();
+        vm.warp(block.timestamp + DELIVERY_OFFSET + 1);
+
+        vm.prank(buyer);
+        escrow.claimDeadlineRefund(id);
+
+        assertEq(escrow.totalHeld(), 0, "a refunded purchase holds nothing");
+        _assertReconciled("after deadline refund");
+    }
+
+    // =====================================================================
     // Constructor validation
     // =====================================================================
 

@@ -259,7 +259,16 @@ Sequence for a settled demo:
 - [ ] `genlayer receipt <txHash>` shows the judgment contract **finalized** (not just accepted)
 - [ ] `sourceContract()` and `sourceChainId()` on the escrow match the judgment contract
 - [ ] `relayer()` on the escrow matches `relayer.json`
+- [ ] **Escrow reconciles** — `cast call <escrow> "totalHeld()(uint256)"` equals
+      `cast call <usdc> "balanceOf(address)(uint256)" <escrow>` at every point in
+      the demo, not just at rest. Run it once mid-dispute, when the escrow holds
+      both a price and a bond; that is the state where a leak would show.
 - [ ] Relayer runs clean in `DRY_RUN=true` for one full dispute
 - [ ] At least one purchase settled, visible at `/verdict/<id>` and `/receipt/<id>`
 - [ ] Home page proof card shows the real settlement
 - [ ] No key material in `git ls-files`
+
+The reconciliation check is the one item here that nothing else covers. It is a
+plain read, it needs no key, and it is the only way a retained-value bug in the
+escrow becomes visible — if the two numbers ever diverge, stop and find out why
+before showing the demo.

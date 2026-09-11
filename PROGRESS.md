@@ -13,7 +13,7 @@ Work log, newest first. For durable decisions and constraints see
 |:--|:--|
 | Repo scaffold | 🟢 done |
 | Base escrow contract | 🟢 **compiles — `forge build` exits 0, solc 0.8.24** |
-| Escrow tests | 🟢 **112/112 passing locally** (was 0 executed before this session) |
+| Escrow tests | 🟢 **122/122 passing locally** (was 112 before the reconciliation tests) |
 | GenLayer judgment contract | 🟡 syntax-checked locally; **SDK surface unverified** (needs `genvm-lint`) |
 | Judgment logic tests | 🟢 **passing locally** (11/11) |
 | Cross-language hash vectors | 🟢 done and locked from both sides |
@@ -21,7 +21,7 @@ Work log, newest first. For durable decisions and constraints see
 | Frontend (7 screens) | 🟢 **8 routes typecheck clean (`tsc --noEmit` exit 0) AND build (`next build` exit 0)** — verified locally 2026-09-11 |
 | CI (GitHub Actions) | ⚠️ file written, **cannot push** — token lacks `workflow` scope |
 | README / security narrative | 🟢 README, `docs/SECURITY.md`, `docs/DEPLOY.md` all written — every cross-link resolves |
-| docs/MONEY_RAILS_AUDIT.md | 🟢 written — Issues 1–3 clean, Issue 4 flagged unmeasured |
+| docs/MONEY_RAILS_AUDIT.md | 🟢 written — Issues 1–2 clean, Issue 3's gap closed by `totalHeld()`, Issue 4 still flagged unmeasured |
 | GitHub push wired up | 🟢 working (code pushes fine; only `.github/workflows/` is blocked) |
 | Vercel deploy | 🟡 **build-verified locally; not yet deployed** — see the Vercel readiness note below |
 | GenLayer deploy (Bradbury) | 🔴 **blocked by network, not by code** — see Session 8 |
@@ -30,7 +30,7 @@ Work log, newest first. For durable decisions and constraints see
 Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 
 > **The Solidity is now compiled and executed.** As of 2026-09-11 the escrow
-> builds under solc 0.8.24 and all 112 Foundry tests pass — the first time any
+> builds under solc 0.8.24 and all 122 Foundry tests pass — the first time any
 > Solidity in this repo has been through a compiler. It took three compile
 > errors and two test-harness bugs to get there, all listed in Session 7. The
 > caveat that replaces the old one: **this was a local run on the developer
@@ -62,6 +62,49 @@ Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 > from one poll and a transaction object from the next. Two deploy attempts were
 > accepted and then never finalized. **No GenLayer contract address exists yet**,
 > which blocks the Base escrow deploy behind it.
+
+---
+
+## 2026-09-11 — Session 9
+
+Short session. Closed the one real gap the money-rails audit found, and kept the
+documents honest about it.
+
+### Done
+
+- **Added `RecourseEscrow.totalHeld()`** — a view returning what the contract's
+  own ledger says it is holding: the price of every `FUNDED`, `DELIVERED` or
+  `DISPUTED` purchase, plus the bond of every `DISPUTED` one. Compare it against
+  `usdc.balanceOf(escrow)` and a surplus means value arrived with no ledger
+  entry. This is the reconciliation check the money-rails doc's checklist asks
+  for, and it was the only gap that audit found in Recourse.
+- **Added 10 tests for it** (`contracts/test/RecourseEscrow.t.sol`), 112 → **122
+  passing**. They assert the two numbers agree at every stage: zero before
+  anything happens, ignored while an offer is unpaid, counted once funded and
+  still counted once delivered, bond added once disputed, zero again after both
+  a release *and* a refund settlement, correct across a mixed-stage set, and
+  unaffected by cancelled offers or deadline refunds. The assertions compare
+  against the non-zero `PRICE` constant, so they cannot pass vacuously.
+- **Measured the cost.** Runtime went 16,403 → **16,651 B**, still 7,925 B under
+  the EIP-170 limit. The loop is `O(purchases)` and view-only, so it costs no
+  gas to anyone — it is a read for a human or a monitor.
+- **Updated every document that recorded the gap as open** —
+  `docs/MONEY_RAILS_AUDIT.md` (both the Issue 3 section and the "what to do
+  next" list), `docs/SECURITY.md` §7, `PROGRESS.md` and `MEMORY.md`. All four
+  now say the same thing, including the half that is still true: **the view has
+  no caller.** Nothing watches it on a live deployment, so the gap is closed for
+  a person checking and still open for a machine watching.
+
+### Not done
+
+- The GenLayer deploy is still blocked exactly as Session 8 left it. A background
+  poll for the receipt of `0x07959f67…4047f6` ran for ~20 minutes and produced
+  nothing, which is consistent with the load-balanced-mempool diagnosis rather
+  than a new fault: the transaction was accepted by one node and no node the
+  poller reached had it. No new information, no new action.
+- `docs/DEPLOY.md` §7 now carries the reconciliation read as a post-deploy
+  check, with the note to run it *mid-dispute* — the state where the escrow
+  holds both a price and a bond is the one where a leak would actually show.
 
 ---
 

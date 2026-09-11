@@ -280,6 +280,11 @@ docs/        DATA_MODEL.md, SECURITY.md, DEPLOY.md
   matters and has not been measured. Details and the minify fallback are in
   [docs/MONEY_RAILS_AUDIT.md](./docs/MONEY_RAILS_AUDIT.md). Issues 1–3 do not
   apply — the judgment contract has no payout rail and no payable method.
+  **Issue 3's one real gap is now closed:** `RecourseEscrow.totalHeld()` reports
+  what the contract's books say it holds, to be compared against
+  `usdc.balanceOf(escrow)`. It is a view with no caller — the monitoring job that
+  would alert on a divergence is not written, so the gap is closed for a human
+  checking and open for a machine watching.
 - ~~The user's demo/browser wallet address~~ — **answered 2026-09-11.**
   `0x0DE10708F8c6DF7b73068d53def715A70C0f340D`, key in `.secrets/demo.json`.
   Still needs Base Sepolia ETH (it has none), and USDC if it plays the buyer.

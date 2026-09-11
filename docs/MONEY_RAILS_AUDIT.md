@@ -75,6 +75,15 @@ exposed anywhere. The doc's checklist asks for exactly this, and Recourse does
 not have it. It is a real gap, not a theoretical one — it is the only way a
 retained-value leak in the escrow would become visible.
 
+> **Closed 2026-09-11.** `RecourseEscrow.totalHeld()` now returns what the
+> contract's own books say it is holding — the price of every FUNDED, DELIVERED
+> or DISPUTED purchase, plus the bond of every DISPUTED one. Compare it against
+> `usdc.balanceOf(escrow)`; a surplus means value arrived with no ledger entry.
+> It is covered by 10 tests that assert the two agree at every stage of the
+> lifecycle, including after both a release and a refund. Escrow size went
+> 16,403 → 16,651 B runtime (7,925 B under the EIP-170 limit); suite went
+> 112 → 122 tests, all passing.
+
 ## Issue 4 — Bradbury's per-transaction pubdata limit
 
 **Relevant, unresolved.** Bradbury rejects deploys whose **compiled artifact**
@@ -110,8 +119,11 @@ recover without touching behaviour.
 
 1. **Measure the compiled artifact** for `recourse_judgment.py` before deploying
    to Bradbury. This is the one open item from this checklist.
-2. **Add an escrow reconciliation check** — a `balanceOf(escrow)` read compared
-   against the contract's own accounting. Closes the Issue 3 gap above.
+2. ~~**Add an escrow reconciliation check**~~ — **done 2026-09-11**:
+   `RecourseEscrow.totalHeld()`, with 10 tests. See the Issue 3 section above.
+   The remaining half is a monitoring job that alerts when `totalHeld()` and
+   `balanceOf(escrow)` diverge on a live deployment; the view exists, nothing
+   watches it.
 3. Issues 1 and 2 need no action. Re-run both greps if a payout rail is ever
    added to the judgment contract; the checks are only meaningful while the
    contract holds nothing.

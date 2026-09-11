@@ -630,6 +630,47 @@ contract RecourseEscrow {
         return nextPurchaseId - 1;
     }
 
+    /// @notice What the escrow's own books say it is holding, in USDC base units.
+    ///
+    /// @dev This exists to be compared against `usdc.balanceOf(address(this))`.
+    ///      The two should be equal. If the real balance is **higher**, the
+    ///      escrow is holding value its ledger does not account for — money that
+    ///      arrived and was never recorded, which is precisely the failure mode
+    ///      a reverted payable call produces on GenLayer (see
+    ///      docs/MONEY_RAILS_AUDIT.md). The escrow has no payable fallback and no
+    ///      revert path that can retain a token transfer, so a surplus here means
+    ///      something genuinely new and should be investigated rather than
+    ///      explained away.
+    ///
+    ///      A failed `settle` cannot desynchronise the two: `settle` writes the
+    ///      stage and the nonce **before** it touches the token, so a reverted
+    ///      payout leaves the ledger and the balance exactly as they were,
+    ///      both still counting the purchase as held.
+    ///
+    ///      O(purchaseCount) over storage. It is a view called from the UI and
+    ///      never from a state-changing path, and the count is small at demo
+    ///      scale — the frontend already walks the same range to render the list.
+    function totalHeld() external view returns (uint256 held) {
+        uint256 n = nextPurchaseId;
+        for (uint256 id = 1; id < n; ++id) {
+            Purchase storage p = _purchases[id];
+            Stage s = p.stage;
+
+            // Funded, delivered and disputed purchases all sit on the buyer's
+            // money. No other stage holds any: OPEN has not been paid for, and
+            // SETTLED has already been paid out.
+            if (s == Stage.FUNDED || s == Stage.DELIVERED || s == Stage.DISPUTED) {
+                held += p.price;
+            }
+
+            // The bond is posted at dispute time and released by the settlement,
+            // so DISPUTED is the only stage that can be holding one.
+            if (s == Stage.DISPUTED) {
+                held += p.disputeBond;
+            }
+        }
+    }
+
     /// @notice GenLayer is a separate chain with its own storage. This is the
     ///         key the relayer uses there, and it is derived here so both
     ///         sides cannot drift: "recourse:<chainId>:<escrow>:<purchaseId>".
