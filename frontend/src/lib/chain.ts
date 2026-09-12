@@ -74,6 +74,24 @@ export function escrowAddress(): Address {
 export const RPC_URL =
   process.env.NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL?.trim() || 'https://sepolia.base.org';
 
+/**
+ * The endpoint handed to a *wallet* — which is not always the one we read from.
+ *
+ * `RPC_URL` may be overridden by `NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL` and can
+ * therefore be a private, keyed endpoint (Alchemy, QuickNode, a local node).
+ * Writing that into the user's wallet is wrong twice over: it publishes a
+ * credential to a third party that now stores and uses it for every request the
+ * wallet makes, and it points the wallet at an endpoint MetaMask cannot
+ * recognise as Base Sepolia. MetaMask's response to an unrecognised provider
+ * for a known chain id is a security warning about the network — the "you could
+ * lose funds" dialog — which is exactly the right thing for it to do, and
+ * entirely our fault for causing.
+ *
+ * So the wallet always gets the canonical public endpoint, whether or not this
+ * deployment reads through something faster.
+ */
+export const CANONICAL_BASE_SEPOLIA_RPC = 'https://sepolia.base.org';
+
 export const EXPLORER_URL = 'https://sepolia.basescan.org';
 
 /**
@@ -103,13 +121,53 @@ export function publicClient(): PublicClient {
 }
 
 /**
- * The injected provider, or null when there is no wallet in this browser.
+ * The provider this app has settled on, chosen by EIP-6963 discovery.
+ *
+ * Held here rather than passed around because `walletClient` and the reads are
+ * called from screens that know nothing about wallets, and threading a provider
+ * through every one of them would put connector plumbing into the purchase
+ * flow. `./wallet` is the only writer.
+ */
+let selectedProvider: Eip1193Provider | null = null;
+
+/**
+ * Whether `./wallet` has finished deciding.
+ *
+ * Distinguishes "no selection has been made yet, fall back to
+ * `window.ethereum`" from "a selection was made and it is deliberately
+ * nothing". The second happens in a browser with two wallets before the user
+ * has picked one: there is no safe provider to bind to, and falling back would
+ * mean reading an account out of whichever extension loaded last — the exact
+ * bug EIP-6963 discovery exists to fix.
+ */
+let selectionMade = false;
+
+/**
+ * Point the app at one wallet's provider.
+ *
+ * Called by `./wallet` once discovery has run — with the single wallet found,
+ * with the one the user picked out of several, or with `null` to mean "there is
+ * no provider to use", which is not the same as "not decided yet".
+ */
+export function rememberProvider(provider: Eip1193Provider | null): void {
+  selectedProvider = provider;
+  selectionMade = true;
+}
+
+/**
+ * The provider to use, or null when there is no wallet in this browser.
  *
  * Deliberately does not throw: every read-only screen has to keep working
  * without one, and the pages decide what to say.
+ *
+ * A selected provider wins over `window.ethereum`. That ordering is the whole
+ * point — with two wallets installed, `window.ethereum` is whichever extension
+ * happened to load last, and using it is how an app connects to a wallet the
+ * user is not looking at.
  */
 export function injected(): Eip1193Provider | null {
   if (typeof window === 'undefined') return null;
+  if (selectionMade) return selectedProvider;
   return (window as unknown as { ethereum?: Eip1193Provider }).ethereum ?? null;
 }
 
@@ -121,7 +179,30 @@ export interface Eip1193Provider {
 
 export class WalletError extends Error {}
 
-/** Ask the wallet for an account, switching to Base Sepolia if it is elsewhere. */
+/**
+ * Ask the wallet for an account.
+ *
+ * ASKS FOR AN ACCOUNT AND NOTHING ELSE. It does not switch networks, and that
+ * is a deliberate product decision rather than an omission.
+ *
+ * This used to call `ensureChain` on the way out, which meant a first click on
+ * "Connect wallet" produced two wallet dialogs in a row: the account prompt,
+ * then a network prompt. The second one is the problem. If the wallet has never
+ * seen Base Sepolia it is an *add network* dialog, and wallets — correctly —
+ * treat that as a security decision: an RPC endpoint the wallet does not
+ * recognise can lie about balances and censor or rewrite transactions, so the
+ * dialog says so, in the strongest terms it has. A user who clicked one button
+ * labelled "Connect wallet" is suddenly being asked to accept a risk of losing
+ * funds, on a screen that never explained why.
+ *
+ * Nothing about that dialog is inaccurate. It is just the wrong moment: a
+ * person connecting to look at a page is not transacting yet, and asking them
+ * to weigh a network's trustworthiness before they have read a single offer is
+ * how you lose them. So connecting connects. The network is raised when it
+ * matters — at the first write, where the user is already signing something and
+ * the question is obviously about the thing in front of them — and an explicit
+ * button in the header covers the user who would rather switch first.
+ */
 export async function connect(): Promise<Address> {
   const provider = injected();
   if (provider === null) {
@@ -136,7 +217,6 @@ export async function connect(): Promise<Address> {
     throw new WalletError('The wallet returned no accounts.');
   }
 
-  await ensureChain(provider);
   return first as Address;
 }
 
@@ -153,14 +233,29 @@ export async function currentAccount(): Promise<Address | null> {
 }
 
 /**
- * Move the wallet to Base Sepolia.
+ * Move the wallet to Base Sepolia, adding the chain first if it has never seen
+ * it.
  *
- * `wallet_switchEthereumChain` fails with code 4902 when the wallet has never
- * seen the chain, so that case is caught and answered with an add-then-switch.
- * Without this, a user whose wallet defaults to Ethereum mainnet gets a
- * confusing "chain mismatch" on their first write and no way forward.
+ * `wallet_switchEthereumChain` fails with code 4902 when the wallet has no
+ * entry for the chain id, so that case is caught and answered with an
+ * add-then-switch. Without it, a user whose wallet defaults to Ethereum
+ * mainnet gets a confusing "chain mismatch" on their first write and no way
+ * forward.
+ *
+ * Exported because it is called from two places that are both deliberate: the
+ * write path (see `writeEscrow`), where the user is about to sign and the
+ * network has to be right, and an explicit "Switch to Base Sepolia" button in
+ * the header, so the user can settle the question before they start rather than
+ * being interrupted mid-action.
+ *
+ * It is NOT called from `connect()`. See the note there.
  */
-async function ensureChain(provider: Eip1193Provider): Promise<void> {
+export async function ensureChain(): Promise<void> {
+  const provider = injected();
+  if (provider === null) {
+    throw new WalletError('No wallet found in this browser.');
+  }
+
   const current = (await provider.request({ method: 'eth_chainId' })) as string;
   if (parseInt(current, 16) === CHAIN_ID) return;
 
@@ -170,26 +265,53 @@ async function ensureChain(provider: Eip1193Provider): Promise<void> {
       method: 'wallet_switchEthereumChain',
       params: [{ chainId: hexId }],
     });
+    return;
   } catch (e) {
     const code = (e as { code?: number }).code;
+
+    // 4001 is the user declining. Reporting that as "could not switch" buries
+    // the one fact that matters — they said no — and leaves them looking for a
+    // fault that is not there. It also leaves the app on the wrong chain, which
+    // the message has to say, because the next write will fail.
+    if (code === 4001) {
+      throw new WalletError(
+        `This purchase settles on ${baseSepolia.name}, and the request to switch was declined. ` +
+          `Switch to ${baseSepolia.name} in your wallet to continue.`,
+      );
+    }
+
     if (code !== 4902) {
       throw new WalletError(
         `Could not switch the wallet to ${baseSepolia.name}. ` +
           `Switch to it manually and try again.`,
       );
     }
-    await provider.request({
-      method: 'wallet_addEthereumChain',
-      params: [
-        {
-          chainId: hexId,
-          chainName: baseSepolia.name,
-          nativeCurrency: baseSepolia.nativeCurrency,
-          rpcUrls: [RPC_URL],
-          blockExplorerUrls: [EXPLORER_URL],
-        },
-      ],
-    });
+  }
+
+  await provider.request({
+    method: 'wallet_addEthereumChain',
+    params: [
+      {
+        chainId: hexId,
+        chainName: baseSepolia.name,
+        nativeCurrency: baseSepolia.nativeCurrency,
+        // CANONICAL, not RPC_URL. See the note on that constant: this is the one
+        // value here that is written into the user's wallet and kept there.
+        rpcUrls: [CANONICAL_BASE_SEPOLIA_RPC],
+        blockExplorerUrls: [EXPLORER_URL],
+      },
+    ],
+  });
+
+  // Most wallets switch to a chain they have just been given. Not all do, and
+  // the ones that do not would otherwise leave the app reporting a successful
+  // switch while the next transaction goes to the wrong network.
+  const after = (await provider.request({ method: 'eth_chainId' })) as string;
+  if (parseInt(after, 16) !== CHAIN_ID) {
+    throw new WalletError(
+      `Added ${baseSepolia.name} to your wallet, but it is not selected. ` +
+        `Choose it in your wallet to continue.`,
+    );
   }
 }
 

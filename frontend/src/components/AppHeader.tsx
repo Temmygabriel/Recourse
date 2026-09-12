@@ -7,9 +7,23 @@
  * every screen, so the chrome that competes with it — a big product nav, a hero
  * banner, a chain selector — is not here. What is left is the product name, the
  * two things a visitor can do, and which account is connected.
+ *
+ * THE ONE THING THAT IS NOT THIN: THE WRONG-NETWORK BANNER.
+ *
+ * The chain chip used to say "Wrong network — reconnect" and nothing else. That
+ * was wrong twice. Reconnecting does not change the network — the wallet is on
+ * whatever chain the user left it on, and `connect()` no longer switches (see
+ * ./lib/chain for why) — so the hint sent people to do the one thing that could
+ * not help. And it was a status with no action, on a state the user has to
+ * leave before anything in the app will work.
+ *
+ * So it is a banner with a button. It appears only once a wallet is connected
+ * and known to be elsewhere, which is a fact probed with `eth_chainId` rather
+ * than assumed, and it names the network it wants.
  */
 
 import Link from 'next/link';
+import { useState } from 'react';
 
 import { ShieldCheckIcon } from '@/components/Icon';
 import { useWallet } from '@/lib/wallet';
@@ -17,7 +31,29 @@ import { CHAIN, EXPLORER_URL } from '@/lib/chain';
 import { shortAddress } from '@/lib/escrow';
 
 export function AppHeader() {
-  const { account, connect, connecting, error, hasWallet, chainOk, clearError } = useWallet();
+  const {
+    account,
+    connect,
+    connecting,
+    error,
+    hasWallet,
+    ready,
+    chainOk,
+    switchNetwork,
+    walletName,
+    clearError,
+  } = useWallet();
+
+  const [switching, setSwitching] = useState(false);
+
+  const onSwitch = async () => {
+    setSwitching(true);
+    try {
+      await switchNetwork();
+    } finally {
+      setSwitching(false);
+    }
+  };
 
   return (
     <header className="border-b border-rule bg-surface">
@@ -58,36 +94,70 @@ export function AppHeader() {
             chain and the contract is immutable; a selector would imply a choice
             the user does not have.
           */}
-          <span className="status status-neutral" title={`Chain id ${CHAIN.id}`}>
+          <span
+            className={`status ${chainOk ? 'status-neutral' : 'status-contested'}`}
+            title={`Chain id ${CHAIN.id}`}
+          >
             {CHAIN.name}
           </span>
-
-          {!chainOk && account !== null && (
-            <span className="status status-contested">Wrong network — reconnect</span>
-          )}
 
           {account === null ? (
             <button
               type="button"
               className="btn btn-primary"
               onClick={() => void connect()}
-              disabled={connecting}
+              // Not before discovery has run. Until it has, the app does not
+              // know how many wallets are installed, so it cannot know whether
+              // to connect straight away or ask which one — and guessing is the
+              // bug. The window is ~250ms.
+              disabled={connecting || !ready}
             >
-              {connecting ? 'Connecting…' : hasWallet ? 'Connect wallet' : 'Install a wallet'}
+              {connecting
+                ? 'Connecting…'
+                : // Until discovery has run, `hasWallet` is not yet known to be
+                  // false — it is merely not yet known. Saying "Install a
+                  // wallet" during that window would be a claim the app has not
+                  // checked, and would flash at users who have one.
+                  ready && !hasWallet
+                  ? 'Install a wallet'
+                  : 'Connect wallet'}
             </button>
           ) : (
+            // The wallet's name is in the tooltip rather than the row. With two
+            // wallets installed, "which one is this app talking to" is the
+            // first question about any surprising address or balance, and it
+            // should be answerable without opening the picker again.
             <a
               href={`${EXPLORER_URL}/address/${account}`}
               target="_blank"
               rel="noreferrer"
               className="ident no-underline hover:underline"
-              title={account}
+              title={walletName === null ? account : `${walletName} — ${account}`}
             >
               {shortAddress(account)}
             </a>
           )}
         </div>
       </div>
+
+      {!chainOk && account !== null && (
+        <div className="sheet pb-3">
+          <p className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[13px] text-contested">
+            <span className="min-w-0 flex-1">
+              Your wallet is on another network. Everything here settles on {CHAIN.name}, on
+              chain id {CHAIN.id} — no transaction can be signed until the wallet is switched.
+            </span>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={switching}
+              onClick={() => void onSwitch()}
+            >
+              {switching ? 'Switching…' : `Switch to ${CHAIN.name}`}
+            </button>
+          </p>
+        </div>
+      )}
 
       {error !== null && (
         <div className="sheet pb-3">

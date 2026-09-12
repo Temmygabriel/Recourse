@@ -20,7 +20,7 @@
 
 import { decodeEventLog, parseAbiItem, type Address } from 'viem';
 
-import { ESCROW, publicClient, usdcAddress, walletClient } from './chain';
+import { ensureChain, ESCROW, publicClient, usdcAddress, walletClient } from './chain';
 import type { Purchase } from './abi';
 import { erc20Abi, escrowAbi } from './abi';
 
@@ -219,6 +219,12 @@ export async function usdcAllowance(owner: Address): Promise<bigint> {
  * dispute bond need an allowance first. Re-approving when the existing allowance
  * already covers the amount would cost the user a second transaction and a
  * second confirmation prompt for nothing.
+ *
+ * The approval is for the exact amount, never an unlimited one. An unlimited
+ * allowance would save a transaction on the user's *next* purchase and is what
+ * most apps do, but it also hands the escrow a standing right to every USDC
+ * that wallet will ever hold, and it is the pattern wallet security warnings
+ * are aimed at.
  */
 export async function ensureAllowance(
   account: Address,
@@ -227,6 +233,7 @@ export async function ensureAllowance(
   const existing = await usdcAllowance(account);
   if (existing >= amount) return null;
 
+  await ensureChain();
   const wallet = walletClient(account);
   return wallet.writeContract({
     address: await usdcAddress(),
@@ -250,6 +257,15 @@ export async function writeEscrow(
     | 'claimDeadlineRefund',
   args: readonly unknown[],
 ): Promise<`0x${string}`> {
+  // The write path is where the network gets settled, rather than at connect.
+  // See the note on `connect()` in ./chain: raising it here means it is raised
+  // once, at a moment the user is already signing something and a network
+  // prompt is self-explanatory, instead of twice in a row on the first click.
+  //
+  // It is idempotent and costs one `eth_chainId` round trip when already
+  // correct, which is the common case.
+  await ensureChain();
+
   const wallet = walletClient(account);
   // viem's per-function argument inference narrows `args` to the union of all
   // eight signatures, which it cannot check against a dynamic name. The ABI is

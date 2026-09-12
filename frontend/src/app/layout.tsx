@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 
 import './globals.css';
 import { AppHeader } from '@/components/AppHeader';
+import { WalletPicker } from '@/components/WalletPicker';
 import { WalletProvider } from '@/lib/wallet';
 
 export const metadata: Metadata = {
@@ -17,6 +18,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="flex min-h-screen flex-col">
         <WalletProvider>
           <AppHeader />
+          {/* Rendered here rather than inside the header because it is a
+              full-screen overlay, and it reads its own state from the wallet
+              context — the header only triggers it. */}
+          <WalletPicker />
           <main className="flex-1 py-8">{children}</main>
           <footer className="doc-rule mt-8">
             <div className="sheet flex flex-col gap-2 py-6 text-[12px] text-ink-muted">
