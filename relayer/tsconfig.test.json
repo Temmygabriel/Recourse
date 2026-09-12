@@ -11,10 +11,15 @@
   // keccak256 from ../../scripts/gen-wallet.mjs, deliberately, so that the hash
   // assertions rest on the one Keccak-256 implementation in this repo that
   // checks itself against published vectors. `scripts/gen-wallet.d.mts` types it.
+  //
+  // `scripts/**/*.ts` is included so the live E2E driver is typechecked too. It
+  // is not imported by any test and never runs in CI — it needs funded testnet
+  // keys and a live escrow — so without this line the one script that touches
+  // real money would be the only TypeScript in the repo no compiler ever sees.
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
     "rootDir": ".."
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"]
 }
