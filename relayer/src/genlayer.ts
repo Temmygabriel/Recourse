@@ -42,8 +42,21 @@ export interface GenLayerClient {
   }): Promise<unknown>;
   writeContract(args: Record<string, unknown>): Promise<unknown>;
   estimateTransactionFeesForWrite?(args: Record<string, unknown>): Promise<unknown>;
-  waitForFinalization?(args: { hash: unknown }): Promise<unknown>;
-  waitForTransactionReceipt?(args: { hash: unknown; waitUntil?: string }): Promise<unknown>;
+  // `interval` and `retries` are declared because the defaults are unusable
+  // here — see FINALITY_RETRIES. They are part of the SDK's real signatures
+  // (both functions forward them to the shared polling helper), and naming them
+  // keeps this structural view honest about what we actually pass.
+  waitForFinalization?(args: {
+    hash: unknown;
+    interval?: number;
+    retries?: number;
+  }): Promise<unknown>;
+  waitForTransactionReceipt?(args: {
+    hash: unknown;
+    waitUntil?: string;
+    interval?: number;
+    retries?: number;
+  }): Promise<unknown>;
   [k: string]: unknown;
 }
 
@@ -346,13 +359,42 @@ export interface FinalizedTx {
   readonly raw: Record<string, unknown>;
 }
 
+/**
+ * How long to poll for finality, and how often.
+ *
+ * These are passed EXPLICITLY because genlayer-js's defaults are far too short
+ * for this network and would make the relayer look broken when it is not.
+ *
+ * The SDK defaults are `waitInterval: 3000` and `retries: 10`, i.e. ten 3-second
+ * sleeps and then a hard throw — a **30-second ceiling** on a wait that on
+ * studio-dev routinely takes minutes. Observed in the first live run: the
+ * evaluation was submitted, the wait gave up at status 5 (ACCEPTED), and the
+ * transaction reached FINALIZED shortly afterwards on its own. Nothing was
+ * wrong with the evaluation; the relayer simply stopped looking.
+ *
+ * The failure mode this avoids is subtle and would have been easy to
+ * misdiagnose: the purchase is left in `evaluating` with a valid tx hash, so a
+ * later tick resumes and eventually succeeds. That makes the bug look like
+ * ordinary slowness rather than a fixed 30-second timeout, and it would have
+ * burned a tick — and a re-read of the receipt — on every single settlement.
+ *
+ * 20 minutes at 5-second intervals. The interval is raised from the SDK's 3s
+ * because a finalized GenLayer transaction never un-finalizes, so there is
+ * nothing to gain from polling harder; the cost of a longer interval is bounded
+ * latency on the success path, and the cost of a shorter one is pointless load
+ * on a shared RPC.
+ */
+const FINALITY_RETRIES = 240;
+const FINALITY_INTERVAL_MS = 5_000;
+
 /** Wait for finality, tolerating either SDK spelling of the wait call. */
 export async function waitForFinality(sdk: Sdk, txId: Hex): Promise<FinalizedTx> {
+  const poll = { hash: txId, interval: FINALITY_INTERVAL_MS, retries: FINALITY_RETRIES };
   let tx: unknown;
   if (typeof sdk.client.waitForFinalization === 'function') {
-    tx = await sdk.client.waitForFinalization({ hash: txId });
+    tx = await sdk.client.waitForFinalization(poll);
   } else if (typeof sdk.client.waitForTransactionReceipt === 'function') {
-    tx = await sdk.client.waitForTransactionReceipt({ hash: txId, waitUntil: 'finalized' });
+    tx = await sdk.client.waitForTransactionReceipt({ ...poll, waitUntil: 'finalized' });
   } else {
     throw new GenLayerSdkError(
       'the genlayer-js client has neither waitForFinalization nor ' +
