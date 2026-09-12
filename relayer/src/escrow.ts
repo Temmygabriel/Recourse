@@ -29,11 +29,7 @@ import {
   createWalletClient,
   http,
   type Address,
-  type PublicClient,
-  type WalletClient,
   type Hex,
-  type Transport,
-  type Chain,
 } from 'viem';
 import { privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts';
 import { baseSepolia } from 'viem/chains';
@@ -78,22 +74,43 @@ export interface LocalCommitments {
 
 export class EscrowMismatch extends Error {}
 
+/**
+ * Both chain clients, built once, with their types DERIVED rather than declared.
+ *
+ * Writing `PublicClient<Transport, Chain>` by hand is what broke this build. It
+ * looked equivalent and was not: `baseSepolia` is an OP-stack chain, so
+ * `createPublicClient({ chain: baseSepolia })` returns a client whose
+ * `getBlock()` admits `type: "deposit"` transactions — a strictly different type
+ * from the generic one. Assigning the specific to the generic is not allowed,
+ * and tsc reported it as TS2719 "two different types with this name exist, but
+ * they are unrelated", which reads like a duplicated dependency and is not.
+ *
+ * Deriving the type from the factory keeps the two identical by construction, so
+ * this cannot drift again when viem changes what a chain-specific client looks
+ * like. The alternative — casting at the boundary — would have silenced the
+ * error while leaving the declared type a lie about what the client actually
+ * returns.
+ */
+function buildClients(rpcUrl: string, account: PrivateKeyAccount) {
+  const transport = http(rpcUrl, { retryCount: 3, timeout: 30_000 });
+  return {
+    publicClient: createPublicClient({ chain: baseSepolia, transport }),
+    walletClient: createWalletClient({ account, chain: baseSepolia, transport }),
+  };
+}
+
+type BuiltClients = ReturnType<typeof buildClients>;
+
 export interface BaseContext {
-  readonly publicClient: PublicClient<Transport, Chain>;
-  readonly walletClient: WalletClient<Transport, Chain, PrivateKeyAccount>;
+  readonly publicClient: BuiltClients['publicClient'];
+  readonly walletClient: BuiltClients['walletClient'];
   readonly account: PrivateKeyAccount;
   readonly escrow: Address;
 }
 
 export function createBaseContext(rpcUrl: string, escrow: Address, privateKey: `0x${string}`): BaseContext {
   const account = privateKeyToAccount(privateKey);
-  const transport = http(rpcUrl, { retryCount: 3, timeout: 30_000 });
-  return {
-    account,
-    escrow,
-    publicClient: createPublicClient({ chain: baseSepolia, transport }),
-    walletClient: createWalletClient({ account, chain: baseSepolia, transport }),
-  };
+  return { account, escrow, ...buildClients(rpcUrl, account) };
 }
 
 /**
