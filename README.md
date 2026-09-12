@@ -131,7 +131,7 @@ anyone is handed one.
 | **Relayer signer** | `.secrets/relayer.json` | `settle()` only. Cannot withdraw, cannot pause, cannot change configuration | **Can settle any disputed purchase to a verdict of its choosing** (subject to the coherence checks), and can censor by refusing to relay. Cannot touch funds that are not already in a disputed purchase. |
 | **Deployer / faucet key** | `.secrets/deployer.json` | Pays gas for deploys. Same address as owner above in this prototype | Same as the owner row. In this build it is intentionally one key; a real deployment should separate them. |
 | **Demo wallet** | `.secrets/demo.json` | Signs as buyer/seller in the browser demo. Testnet only | Can spend its own testnet balance. No privileged role. |
-| **GenLayer deployer** | `~/.genlayer/keystores/default.json` — the CLI's own keystore, **outside this repository entirely** | Deploys and updates the judgment contract | Could deploy a judgment contract whose address the escrow does not accept — harmless — or, if `sourceContract` were ever re-pointed, author a different judgment layer. `sourceContract` is immutable, so in practice this key cannot change what the live escrow accepts. |
+| **GenLayer deployer** | The GenLayer CLI's own keystore, `%USERPROFILE%\.genlayer\keystores\` — **outside this repository entirely**. The active account is `deployer` | Deploys and updates the judgment contract | Could deploy a judgment contract whose address the escrow does not accept — harmless — or, if `sourceContract` were ever re-pointed, author a different judgment layer. `sourceContract` is immutable, so in practice this key cannot change what the live escrow accepts. |
 
 **None of these keys are in the repository.** The Base keys live in `.secrets/`,
 which is gitignored (`.gitignore` line 2 — `git check-ignore -v .secrets/demo.json`
@@ -148,7 +148,7 @@ on purpose.
 ```
 contracts/          Foundry — the Base escrow
   src/RecourseEscrow.sol     the money, the state machine, the checks
-  test/                      112 tests: state machine + attack paths
+  test/                      122 tests: state machine + attack paths
 genlayer/           the judgment layer
   contracts/recourse_judgment.py    the AI jury
   tests/                      pure-Python logic tests (no network)
@@ -170,17 +170,26 @@ Honest about what is proven and what is not.
 
 | Component | State |
 |:--|:--|
-| Base escrow | **Compiles clean; 112/112 tests pass** (`forge test`). Runtime 16,403 B — 8,173 B under the EIP-170 limit. **Not yet deployed.** |
-| GenLayer judgment contract | Written; pure-Python logic tests pass. **Not yet deployed.** |
-| Relayer | Written; logic tested without dependencies. **Never run against a live GenLayer.** |
-| Frontend | Written. **Has not been built or run locally** — see below. |
-| Deployed end-to-end demo | **Not yet.** Nothing has been deployed to either chain, so no path here has been exercised against a real network. |
+| Base escrow | **Deployed to Base Sepolia** at `0x32288128Ff07Fc9e443161c1F336b784508a056A`. Compiles clean; **122/122 tests pass** (`forge test`). Runtime 16,651 B — 7,925 B under the EIP-170 limit. All seven immutables verified on-chain. |
+| GenLayer judgment contract | **Deployed to studio-dev (61997)** at `0x0f385a4e7400a0693776D19102e0be75D334ce1c` — `FINALIZED` · `MAJORITY_AGREE`, 5 validators, 5 votes revealed. The schema endpoint returns all four methods. |
+| Relayer | Written; logic tested without dependencies (30 tests). **Still has not run against a live GenLayer** — this is the significant gap. |
+| Frontend | Written; typechecks (`tsc --noEmit`) and builds (`next build`, nine routes) locally against the locked dependencies. Not yet hosted. |
+| Deployed end-to-end demo | **Not yet exercised.** Both contracts are live, but no verdict has travelled from GenLayer to Base, and no money has moved. |
 
-**Two caveats on the table above.** The frontend has never been compiled on the
-development machine — it is an 8 GB Windows box that cannot run `npm install` or
-`next build`, so Vercel is the only thing that has ever typechecked it. And no
-part of this system has run against live GenLayer: the relayer's transport is
-exercised by stubs, not by consensus.
+**Be precise about what "deployed" does and does not mean here.** The two
+contracts exist on their chains and their immutable wiring is verified — that is
+real, and it was the hard part. But **nothing has completed the full loop**: the
+relayer has never carried a judgment to `settle()`, so the path that actually
+moves money is untested against a real network. Treat the deployment as
+infrastructure proven and the end-to-end flow as unproven.
+
+Two further limits worth stating plainly:
+
+- The frontend was compiled in a scratch copy outside the repo (this is an 8 GB
+  Windows box), so its build is verified but it has never been served.
+- The judgment contract is deployed to **studio-dev**, a preview network that
+  **may reset**. The escrow's `sourceContract` is immutable, so a reset means
+  redeploying the escrow too — it cannot be repointed.
 
 ## Running it
 

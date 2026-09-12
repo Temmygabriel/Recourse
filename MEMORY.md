@@ -309,9 +309,33 @@ starts failing on gas, that is the wallet to top up, not the deployer.
 | Thing | Address |
 |:--|:--|
 | Base Sepolia USDC | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
-| RecourseEscrow (Base Sepolia) | _not yet deployed_ |
-| GenLayer judgment contract (studio-dev 61997) | **`0x0f385a4e7400a0693776D19102e0be75D334ce1c`** — deployed 2026-09-11, `FINALIZED` · `MAJORITY_AGREE` |
+| **RecourseEscrow (Base Sepolia)** | **`0x32288128Ff07Fc9e443161c1F336b784508a056A`** — deployed 2026-09-11, all seven immutables verified |
+| **GenLayer judgment contract (studio-dev 61997)** | **`0x0f385a4e7400a0693776D19102e0be75D334ce1c`** — deployed 2026-09-11, `FINALIZED` · `MAJORITY_AGREE` |
 | GenLayer judgment contract (studionet 61999) | `0x3bb55747305282DBDbD6baC4215f4796b0Bc12C6` — **wrong chain for the submission**, kept only as evidence that studionet serves the *v0.2.x* runner |
+
+### The two are bound together and cannot be re-paired
+
+The escrow's `sourceContract` (the GenLayer address) and `sourceChainId` (61997)
+are **immutable**. Verified on-chain after deploy alongside `relayer`, `owner`,
+`usdc`, `disputeBondBps` (500) and `paused` (false).
+
+**Consequence — the load-bearing risk:** if **studio-dev resets**, the judgment
+contract at `0x0f385a…` is gone, and the escrow **cannot be repointed**. A reset
+means redeploying the escrow too, and then re-seeding every env var that carries
+the escrow address (`NEXT_PUBLIC_ESCROW_ADDRESS`, `ESCROW_ADDRESS`). Studio-dev
+is a preview network and this is a known property of it, not a surprise — but it
+is the single event that would invalidate the whole deployed stack, so check the
+GenLayer contract still responds before a demo rather than assuming.
+
+**Env wiring:**
+
+| Consumer | Variable | Value |
+|:--|:--|:--|
+| Frontend (Vercel) | `NEXT_PUBLIC_ESCROW_ADDRESS` | `0x32288128Ff07Fc9e443161c1F336b784508a056A` |
+| Relayer | `ESCROW_ADDRESS` | `0x32288128Ff07Fc9e443161c1F336b784508a056A` |
+| Relayer | `GENLAYER_CONTRACT_ADDRESS` | `0x0f385a4e7400a0693776D19102e0be75D334ce1c` |
+| Relayer | `GENLAYER_CHAIN` | `studioDevnet` |
+| Relayer | `RELAYER_PRIVATE_KEY_FILE` | `../.secrets/relayer.key` |
 
 ---
 

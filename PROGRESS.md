@@ -25,7 +25,8 @@ Work log, newest first. For durable decisions and constraints see
 | GitHub push wired up | 🟢 working (code pushes fine; only `.github/workflows/` is blocked) |
 | Vercel deploy | 🟡 **build-verified locally; not yet deployed** — see the Vercel readiness note below |
 | GenLayer deploy (studio-dev 61997) | 🟢 **DEPLOYED — `0x0f385a4e7400a0693776D19102e0be75D334ce1c`, FINALIZED · MAJORITY_AGREE, 5/5 validators; schema loads** |
-| Base escrow deploy | 🟡 **unblocked** — the `sourceContract` now exists; deploy is the next step |
+| Base escrow deploy | 🟢 **DEPLOYED — `0x32288128Ff07Fc9e443161c1F336b784508a056A`; all seven immutables verified on-chain** |
+| Vercel deploy | 🟢 **READY — precondition met; one required env var, value known** |
 
 Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 
@@ -153,13 +154,69 @@ together, so it catches all three at once. **Run it before every deploy.**
 - Rewrote the deploy section around the two gates (account/network alignment,
   and the explicit fee distribution) with the working command.
 
+### The Base escrow — deployed in the same session
+
+With the judgment contract live, the escrow's `sourceContract` could finally be
+filled in. Deployed to Base Sepolia:
+
+```
+RecourseEscrow   0x32288128Ff07Fc9e443161c1F336b784508a056A
+tx               0xbf432879b02f14c61040e92dd821a595aacf901529a6a35afcada8a5b2744564
+```
+
+All **seven** immutables verified on-chain, not just the address:
+
+| Field | Value |
+|:--|:--|
+| `sourceContract` | `0x0f385a4e7400a0693776D19102e0be75D334ce1c` |
+| `sourceChainId` | `61997` |
+| `relayer` | `0x49B4f09C5894c1C90B0ca9099AF3De0Faf7f3037` |
+| `owner` | `0xe5Fe9119000C9E1113dc504891A83Da7bbaa7a7b` |
+| `usdc` | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
+| `disputeBondBps` | `500` |
+| `paused` | `false` |
+
+**Three `forge create` traps, each of which cost an attempt:**
+
+1. **Running it from the repo root.** `foundry.toml` is in `contracts/`, so from
+   the root forge finds no config and compiles with the **optimizer off** —
+   producing `Stack too deep`. The error points at the Solidity, so it reads like
+   a contract regression. It is not; `forge build` from `contracts/` passes.
+2. **`--broadcast` placed after `--constructor-args`.** That flag is variadic and
+   swallowed `--broadcast` as a seventh argument →
+   `Constructor argument count mismatch: expected 6 but got 7`. Without
+   `--broadcast` at all, forge compiles, prints the ABI, and deploys nothing.
+3. `sepolia.base.org` returned a transient TLS error (`BadRecordMac`) on one
+   `cast call`; a retry cleared it. That is the RPC, not the contract.
+
+**A standing risk this deploy creates.** `sourceContract` is immutable, so the
+escrow is now permanently bound to `0x0f385a…` on chain 61997. **If studio-dev
+resets, the judgment contract is gone and the escrow cannot be repointed** — a
+reset means redeploying the escrow and re-seeding both env vars. Studio-dev is a
+preview network and this is a known property of it. Check the GenLayer contract
+still responds before a demo rather than assuming.
+
+### Vercel — ready
+
+The precondition ("do not deploy before the escrow exists") is now met. The
+frontend needs **one** required variable and nothing else, because it reads the
+verdict from Base and never from GenLayer:
+
+| Variable | Value |
+|:--|:--|
+| `NEXT_PUBLIC_ESCROW_ADDRESS` | `0x32288128Ff07Fc9e443161c1F336b784508a056A` |
+
+`NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL` is optional. No GenLayer address, key or RPC
+is needed on the frontend at all.
+
 ### Not done
 
-- **The Base escrow is still not deployed**, but it is now *unblocked* — it was
-  waiting on a GenLayer address, and one exists. This is the next step.
-- Vercel env vars follow the escrow address, so they are still unset.
-- `genlayer-known-money-rails-issues.md` still shows its Issue 1 snippet in the
-  old bare-`u256` v0.2 idiom; the pattern is correct, only the spelling is stale.
+- **The relayer has not been run against the live deployment.** Until it runs,
+  the end-to-end path is unproven: nothing has actually carried a verdict from
+  GenLayer to Base. The escrow is deployed and correct, but no money has moved.
+  The next step is `DRY_RUN=true` against a real dispute.
+- No demo data seeded — the frontend would render empty states until offers exist.
+- Vercel itself is not deployed; only its configuration is known.
 
 ---
 
