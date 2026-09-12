@@ -4,11 +4,13 @@ Durable project memory. Read this first when resuming work. It records
 **decisions and constraints**, not a work log — for "what happened when", see
 [PROGRESS.md](./PROGRESS.md).
 
-Last updated: 2026-09-12 (Session 14 — the frontend's two browser-facing defects
-are fixed: **stale reads after a write**, and **wallet connect**. See *The
-wallet surface* and *The frontend reads the verdict from Base* below. The loop
-itself was closed in Session 13: a real dispute settled on Base Sepolia with
-real USDC — see *The loop is proven*.)
+Last updated: 2026-09-12 (Session 15 — the demo is seeded: **six purchases on Base
+Sepolia, one in every stage**, and the seeder that put them there is
+`relayer/scripts/seed-demo.ts`. It replaced a bash+`cast` script that silently
+corrupted a rubric — see *Never build contract text by joining strings* below,
+which is the one lesson from this session worth carrying forward. Session 14
+fixed the frontend's two browser-facing defects, **neither yet exercised against
+a real wallet**; the loop itself was closed in Session 13.)
 
 ---
 
@@ -513,6 +515,49 @@ the spine with the disputed/found marks on it, and the two texts whole. It
 deliberately does **not** split them per criterion — that split does not exist in
 the data, and inventing one would be the single most misleading thing this UI
 could do.
+
+---
+
+## ⚠️ Never build contract text by joining strings — `cast`'s `[a,b,c]` splits on every comma
+
+Found the hard way in Session 14, seeding the demo, and it corrupted real data
+on a live chain before anyone noticed.
+
+`cast` accepts array arguments as `[a,b,c]`, and it splits that on **every
+comma — including commas inside the quoted text**. So:
+
+```
+cast send $ESCROW 'createOffer(uint96,uint64,uint64,string,string[])' \
+  1500000 172800 172800 "$PROMISE" '["The post is between 1,100 and 1,300 words.", "...", "..."]'
+```
+
+...becomes **five** criteria, not three. The rubric is bounded at four, so the
+contract rejects it — that one was loud, and cheap, because nothing was
+written. The dangerous case is the rubric that contains exactly *one* comma:
+that parses as four criteria, **passes** the ≤4 check, and the first criterion
+is stored **cut in half at the comma**. On chain, permanently, in the text a
+judgment is made against. Offer #2 still carries that damage.
+
+There is no escaping rule that fixes this, because the delimiter is also
+ordinary punctuation. The lesson is not "quote it better":
+
+> **Any contract text assembled by string-joining is a liability**, because the
+> failure is silent and the artifact it corrupts is the promise itself.
+
+**How the code handles it:** `relayer/scripts/seed-demo.ts` (which replaced a
+bash+cast seeder, now deleted) passes `string[]` to viem as an actual array and
+lets viem ABI-encode it — no delimiter is ever invented. It also **reads every
+rubric straight back off the chain after creating the offer** (`assertRubric`)
+and compares item-for-item against the source, because a rubric that lost a
+clause is not detectable by reading the offer: it just looks like a terse
+criterion. This is the same principle as D12 — the stored bytes are the
+authority, so verify them rather than trusting the write.
+
+**And if a bad rubric does land:** cancelling is *not* the fix. `cancelOffer`
+sets `stage = NONE` but **keeps `p.seller`**, and `fetchAllPurchases` filters on
+`seller !== ZERO` — so a cancelled offer still renders in the list, as
+`STAGE_INFO[STAGE.NONE]` = "Not found / No record exists for this purchase."
+That is a worse artifact than one slightly-wrong sentence.
 
 ---
 

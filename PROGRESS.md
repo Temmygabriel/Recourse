@@ -23,6 +23,7 @@ Work log, newest first. For durable decisions and constraints see
 | Frontend — wallet connect (Brave / multi-wallet) | 🟡 **rewritten in Session 14** (EIP-6963 discovery, picker, deferred network switch); typechecks and builds, **but has not been exercised against a real wallet** — see Session 14 for what to check |
 | CI (GitHub Actions) | 🟢 **all 5 jobs green on GitHub's runners (57 s)** — the workflow-scope blocker was local, see Session 13 |
 | End-to-end loop | 🟢 **CLOSED — a real dispute settled on Base Sepolia with real USDC; `settle()` mined, verdict carried back from studio-dev** |
+| Demo content on chain | 🟢 **6 purchases, one in every stage**, seeded 2026-09-12 and verified by reading each rubric back off the chain — but **purchase #2 carries a corrupted rubric** from the deleted shell seeder, see Session 15 |
 | README / security narrative | 🟢 README, `docs/SECURITY.md`, `docs/DEPLOY.md` all written — every cross-link resolves |
 | docs/MONEY_RAILS_AUDIT.md | 🟢 written — Issues 1–2 clean, Issue 3's gap closed by `totalHeld()`, Issue 4 still flagged unmeasured |
 | GitHub push wired up | 🟢 working (code pushes fine; only `.github/workflows/` is blocked) |
@@ -90,6 +91,93 @@ Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 > was blocked by two fixable things in our own code — a v0.2.x SDK surface and a
 > default fee distribution. Full retraction in Session 11 and in
 > [`genlayer-studio-dev-deploy-issues.md`](./genlayer-studio-dev-deploy-issues.md).
+
+---
+
+## 2026-09-12 — Session 15
+
+The deployed frontend needs content: a judge who opens the offers list should be
+able to click a row in *every* stage rather than playing both sides of a trade
+first. The user approved this directly — *"seed a few purchases across the
+stages so the deployed frontend has content? yes please"*. It is the last thing
+the Vercel deploy was waiting on.
+
+It went wrong, in a way worth writing down, and then it went right.
+
+### The bug: `cast` splits `[a,b,c]` on every comma, including the ones inside the text
+
+The first seeder was a bash script driving `cast`, and it passed each rubric as
+`'["criterion one", "criterion two", "criterion three"]'`. Cast does not parse
+that as JSON — it splits the argument on **every comma**. So a rubric containing
+commas inside its own sentences silently became more criteria than were written.
+
+Two outcomes, and only one of them was loud:
+
+| | Offer | What happened |
+|:--|:--|:--|
+| **Loud** | #3 | Its rubric contained *"1,100"* and *"1,300"*, so it parsed as **five** criteria against a maximum of four. The contract rejected it — five identical `createOffer` reverts. Nothing was written. Cheap. |
+| **Silent** | #2 | Its rubric contained exactly **one** comma, in *"…all three pages, each with a desktop and a mobile frame."*, so it parsed as **four** — which passes the ≤4 check. It mined successfully and stored the first criterion **cut in half at the comma**. |
+
+The silent one is the lesson. A worse case would have been three commas landing
+on exactly four, or two on three: a valid-looking rubric that is not the rubric
+anybody wrote, in the text a judgment is made against, on chain, permanently.
+
+**There is no escaping rule that fixes this** — the delimiter is ordinary
+punctuation, so no quoting makes it safe. The answer is not to build the string
+in the first place. The seeder was rewritten as **`relayer/scripts/seed-demo.ts`**,
+which passes `string[]` to viem as a real array and lets viem ABI-encode it.
+`scripts/seed-demo.sh` is deleted — leaving a comma-joining `create_offer()` in
+the repo would be a loaded trap for whoever runs it next.
+
+The rewrite also **reads every rubric straight back off the chain** and compares
+it item-for-item against the source (`assertRubric`). A rubric that lost a clause
+is not detectable by reading the offer; it just looks terse. This is D12's
+principle applied to tooling: the stored bytes are the authority, so verify them
+instead of trusting the write.
+
+### What is on chain now
+
+`node scripts/seed-demo.ts --broadcast`, exit 0, `totalHeld()` reconciling with
+the escrow's USDC balance:
+
+| # | Stage | Price | Offer |
+|:--|:--|--:|:--|
+| 1 | **SETTLED** | 5 USDC | the Session 13 loop-closer; untouched |
+| 2 | **OPEN** | 3 USDC | landing page — *created by the broken script, see below* |
+| 3 | **OPEN** | 1.5 USDC | technical blog post |
+| 4 | **FUNDED** | 4 USDC | screen-recorded walkthrough |
+| 5 | **DELIVERED** | 2.5 USDC | accessibility audit — review window open, so accept-vs-dispute can be demoed live |
+| 6 | **DISPUTED** | 2 USDC | Postgres backups — criterion 3 disputed (bitmap `0b100`), 0.1 USDC bond held |
+
+The seeder is **resumable**, which is the point of the shape it ended up in: it
+reads the chain first and does only what is missing, so a run that dies on a
+flaky RPC continues rather than fighting its own half-finished work. Running it
+again now does nothing at all.
+
+### ⚠️ Purchase #2 still carries the corrupted rubric, and it is visible
+
+#2's first criterion is stored as **two fragments** — *"The Figma file contains
+all three pages"* and *"each with a desktop and a mobile frame."* — because that
+is where the comma fell. It reads in the UI as a four-item rubric whose first
+item is half a sentence.
+
+**It was left alone deliberately.** The obvious repair is `cancelOffer`, and it
+makes things *worse*: cancelling sets `stage = NONE` but **keeps `p.seller`**,
+and `fetchAllPurchases` filters on `seller !== ZERO` — so the row stays in the
+list, rendered by `STAGE_INFO[STAGE.NONE]` as *"Not found / No record exists for
+this purchase."* That trades a slightly awkward sentence for a visibly broken
+row on the demo's front page. The escrow has no edit function.
+
+**This is the user's call, not a code decision.** The options are to leave it, or
+to accept a redeploy of the escrow to clear it (which would also clear #1, the
+settled purchase the loop was proven with). Flagged rather than silently
+absorbed.
+
+### Still outstanding from Session 14
+
+Unchanged, and still the biggest gap: **the wallet fixes have never been
+exercised in a real browser.** The four checks are at the end of the Session 14
+entry. Nothing in this session touched the frontend, so none of them moved.
 
 ---
 
