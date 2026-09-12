@@ -20,11 +20,11 @@ WHAT THIS PROVES, AND WHAT IT DOES NOT
          last test here is exhaustive over outcomes x criteria patterns and
          asserts the escrow would accept every verdict `_clamp` can produce.
 
-    It does NOT validate SDK API usage — whether `gl.vm.run_nondet_unsafe` exists
+    It does NOT validate SDK API usage — whether `gl.vm.run_nondet` exists
     with that signature, whether the storage annotation style is current, or
     whether the pinned runner hash resolves. The `genlayer` module is stubbed
     here so the logic can run without the SDK, and a stub is by construction
-    permissive. `genvm-lint check` is what validates the SDK surface.
+    permissive. A deployment into the Studio is what validates the SDK surface.
 """
 
 import hashlib
@@ -47,10 +47,13 @@ VECTORS_PATH = ROOT / "docs" / "vectors" / "hash-vectors.json"
 def _install_genlayer_stub():
     """Minimal stand-in for the SDK, just enough to import the contract.
 
-    The contract does `from genlayer import *`, so only the names it actually
-    touches at import time need to exist: the `gl` namespace used as a base
-    class and a decorator factory, `TreeMap` and `u32` for the storage
-    annotations, and `UserError`.
+    The contract does `import genlayer as gl` (v0.3.0 shape), so the stub must
+    mirror that layout: the `gl` namespace holds `contract.Contract` as the base
+    class, `public` as a decorator factory, `storage.TreeMap` and `u32` for the
+    storage annotations, and `vm.UserError`. The flat `TreeMap`/`u32`/`UserError`
+    of the older v0.2.x surface are deliberately NOT provided — if the contract
+    ever drifts back to the old names, this stub fails the import loudly rather
+    than passing and hiding the regression.
     """
     module = types.ModuleType("genlayer")
 
@@ -79,15 +82,18 @@ def _install_genlayer_stub():
         def __class_getitem__(cls, _item):
             return cls
 
-    module.gl = types.SimpleNamespace(
-        Contract=_Contract,
-        public=_Decorator(),
-        UserError=_UserError,
-        nondet=types.SimpleNamespace(),
-        vm=types.SimpleNamespace(),
-    )
-    module.TreeMap = _TreeMap
+    class _Storage:
+        TreeMap = _TreeMap
+
+    # `import genlayer as gl` binds `gl` to the genlayer PACKAGE, so `gl.contract`
+    # is the top-level `genlayer.contract` submodule, not a namespace nested under
+    # a `gl` attribute. Everything the contract reaches for hangs off the module.
+    module.contract = types.SimpleNamespace(Contract=_Contract)
+    module.storage = _Storage()
+    module.public = _Decorator()
     module.u32 = _U32
+    module.nondet = types.SimpleNamespace()
+    module.vm = types.SimpleNamespace(UserError=_UserError)
 
     sys.modules["genlayer"] = module
 

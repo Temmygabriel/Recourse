@@ -96,21 +96,88 @@ with the contract. Install the matching RC:
 npm install -g genlayer@0.40.0-rc.3
 ```
 
-### Then deploy
+### Then deploy — the fee setup is the part that bites
 
-```bash
-genlayer network set studio-dev
-genlayer deploy --contract genlayer/contracts/recourse_judgment.py --fee-value 10000000000000000
+**✅ Deployed 2026-09-11 on studio-dev:**
+
+```
+RecourseJudgment   0x0f385a4e7400a0693776D19102e0be75D334ce1c
+tx                 0x7cc0dbff9a96bb7266f0b261339f2b6224ca103eedbc4c107b0f9938d86e7c45
+result             FINALIZED · MAJORITY_AGREE  (5 committed, 5 revealed)
 ```
 
-**`--fee-value` is not optional here.** studio-dev is EVM-gasless —
-`eth_gasPrice` is literally `0x0`, and the account's balance is `0`, which is
-*correct and expected*, not a missing faucet. But it still charges a GenLayer
-consensus fee, and a deploy without one reverts `FeeValueMustBeNonZero(1)`.
-Note that `genlayer estimate-fees` cannot help you pick the number: studio-dev's
-public RPC does not expose `sim_getFeeConfig`, and `genlayer trace` fails the
-same way on `gen_dbg_traceTransaction`. The value above works; the amount did
-not change the outcome in any test.
+There are **two** independent gates, and passing one does not pass the other:
+
+**Gate 1 — the CLI must target the right account and network.**
+
+```bash
+genlayer network set studio-dev          # 61997, NOT the default studionet 61999
+genlayer account use deployer            # the FUNDED account
+genlayer account unlock --account deployer --password <pw>
+genlayer account show                    # confirm: studio-dev / 61997 / unlocked / balance > 0
+```
+
+`account show` is the cheap check that catches all three at once. Deploying from
+an account that is locked, unfunded, or being read against the wrong network
+fails in ways that do not name the actual problem.
+
+**Gate 2 — the fee must be an explicit, non-default distribution.**
+
+`--fee-value` on its own is **not** a valid fee setup. It produces a *default*
+distribution (`rotations: [0]`, zero `executionBudgetPerRound`), and the
+FeeManager rejects that with:
+
+```
+FeeValueMustBeNonZero(1)      # selector 0x632be5a1
+```
+
+Note that `--fee-value 10000000000000000` did **not** avoid this — the value was
+never the problem, the distribution was. Ask the network for a real one:
+
+```bash
+genlayer estimate-fees --json
+```
+
+It returns a distribution **and** a matching fee value. Pass both, unchanged:
+
+```json
+{
+  "distribution": {
+    "leaderTimeunitsAllocation": "100",
+    "validatorTimeunitsAllocation": "200",
+    "appealRounds": "0",
+    "executionBudgetPerRound": "25000000000000000",
+    "executionConsumed": "0",
+    "totalMessageFees": "0",
+    "rotations": ["3"],
+    "maxPriceGenPerTimeUnit": "2",
+    "storageFeeMaxGasPrice": "300000000",
+    "receiptFeeMaxGasPrice": "300000000"
+  },
+  "feeValue": "100000000000010352"
+}
+```
+
+```bash
+genlayer deploy --contract genlayer/contracts/recourse_judgment.py \
+  --fees "$(cat fees.json)"
+```
+
+Strip the estimate to just `distribution` and `feeValue` before passing it —
+`estimate-fees` also returns a `policy` block that the deploy does not accept.
+
+> **Correction to an earlier claim in this file.** A previous session recorded
+> that `estimate-fees` "cannot help" because studio-dev's RPC has no
+> `sim_getFeeConfig`. **That is no longer true** — `estimate-fees --json` returns
+> a full distribution and policy on studio-dev today, and it is the source of the
+> values above. The earlier `Method not found` result should not be trusted or
+> repeated; re-run the command rather than reasoning from that note.
+>
+> **If the contract were heavier**, the failure mode changes: a too-low
+> `executionBudgetPerRound` surfaces as an **execution / out-of-budget** error
+> rather than `FeeValueMustBeNonZero`. Raise `executionBudgetPerRound` and the
+> `feeValue` together. The two errors mean different things — read the revert
+> before reaching for a fix.
 
 Record the deployed address. **Verify it is actually finalized before
 continuing** — a `deploy` that prints an address is not proof:
@@ -119,23 +186,26 @@ continuing** — a `deploy` that prints an address is not proof:
 genlayer receipt <txHash>
 ```
 
-### ⚠️ Known blocker — read before retrying
+Success is `status_name: 'FINALIZED'` **and** `result_name: 'MAJORITY_AGREE'`,
+with a non-empty `activator` and a `votes_revealed` of 5. A `FINALIZED` result
+with `result_name: 'NO_MAJORITY'` and `votes_committed: 0` is **not** a deploy —
+that is the unfunded-account signature, and it looks successful if you only read
+the status field.
 
-As of 2026-09-11 this deploy **has not succeeded on studio-dev.** The failure is
-in the network, not in this repository, and here is the evidence for that claim:
+### ⚠️ Superseded — the old "blocked by the network" diagnosis
 
-Every attempt ends identically — `status: FINALIZED` but `result_name:
-'NO_MAJORITY'`, `num_of_rounds: '0'`, `votes_committed: '0'`, `activator: ''`,
-`last_leader: ''`. **No validator ever activates the transaction.** A scan of
-300 consecutive blocks found exactly one non-empty block: ours. Raising the fee
-from 1 wei to 0.01 GEN changed nothing, which rules the fee out as the cause.
+The section this replaces claimed the studio-dev failure was in the network.
+**It was not.** The two real causes were the v0.2.x SDK surface and the default
+fee distribution, both fixed above. The evidence that had been read as "the
+network is not validating" — `NO_MAJORITY`, `votes_committed: '0'`,
+`activator: ''` — is the signature of a transaction that could not pay its fee,
+not of a dead network.
 
-The control that settles it: the **identical contract with the identical fee
-deployed successfully on studionet in the same session** — `MAJORITY_AGREE`,
-5 validators, 5 votes revealed, a live activator, contract at
-`0x3bb55747305282DBDbD6baC4215f4796b0Bc12C6`. So the contract, its `Depends`
-header and its fee path are all sound, and studio-dev is simply not validating
-right now.
+The studionet control (`0x3bb55747305282DBDbD6baC4215f4796b0Bc12C6`, deployed
+with the **v0.2.x** header) is kept only as evidence that **studionet serves
+v0.2.x while studio-dev serves v0.3.0**. It never exonerated the contract — it
+shared the defect. See `MEMORY.md` → the two-SDK-surfaces section.
+
 
 **What to do:** retry later, or raise it with the GenLayer team for the
 hackathon — a preview network that activates no validators is not something the

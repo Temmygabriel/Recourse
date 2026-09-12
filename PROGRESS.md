@@ -14,8 +14,8 @@ Work log, newest first. For durable decisions and constraints see
 | Repo scaffold | 🟢 done |
 | Base escrow contract | 🟢 **compiles — `forge build` exits 0, solc 0.8.24** |
 | Escrow tests | 🟢 **122/122 passing locally** (was 112 before the reconciliation tests) |
-| GenLayer judgment contract | 🟡 syntax-checked locally; **SDK surface unverified** (needs `genvm-lint`) |
-| Judgment logic tests | 🟢 **passing locally** (11/11) |
+| GenLayer judgment contract | 🟢 **migrated to the v0.3.0 SDK surface — this was the schema error** |
+| Judgment logic tests | 🟢 **passing locally** (11/11, re-run after the migration) |
 | Cross-language hash vectors | 🟢 done and locked from both sides |
 | Relayer | 🟢 written; **30/30 pure-logic tests passing locally**; SDK surface verified against the published package |
 | Frontend (7 screens) | 🟢 **8 routes typecheck clean (`tsc --noEmit` exit 0) AND build (`next build` exit 0)** — verified locally 2026-09-11 |
@@ -24,8 +24,8 @@ Work log, newest first. For durable decisions and constraints see
 | docs/MONEY_RAILS_AUDIT.md | 🟢 written — Issues 1–2 clean, Issue 3's gap closed by `totalHeld()`, Issue 4 still flagged unmeasured |
 | GitHub push wired up | 🟢 working (code pushes fine; only `.github/workflows/` is blocked) |
 | Vercel deploy | 🟡 **build-verified locally; not yet deployed** — see the Vercel readiness note below |
-| GenLayer deploy (studio-dev 61997) | 🔴 **blocked by the network, not by code** — no validator activates the tx; the same contract deploys fine on studionet |
-| Base escrow deploy | 🔴 not started (waits on the GenLayer address — `sourceContract` is immutable) |
+| GenLayer deploy (studio-dev 61997) | 🟢 **DEPLOYED — `0x0f385a4e7400a0693776D19102e0be75D334ce1c`, FINALIZED · MAJORITY_AGREE, 5/5 validators; schema loads** |
+| Base escrow deploy | 🟡 **unblocked** — the `sourceContract` now exists; deploy is the next step |
 
 Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 
@@ -62,6 +62,200 @@ Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 > from one poll and a transaction object from the next. Two deploy attempts were
 > accepted and then never finalized. **No GenLayer contract address exists yet**,
 > which blocks the Base escrow deploy behind it.
+
+---
+
+## 2026-09-11 — Session 11
+
+**The judgment contract is deployed on studio-dev.** This was the blocker the
+whole build waited on — the Base escrow's `sourceContract` is immutable, so
+nothing downstream could start without it.
+
+```
+RecourseJudgment   0x0f385a4e7400a0693776D19102e0be75D334ce1c
+tx                 0x7cc0dbff9a96bb7266f0b261339f2b6224ca103eedbc4c107b0f9938d86e7c45
+result             FINALIZED · MAJORITY_AGREE · 5 committed, 5 revealed
+activator          0x6760cDeC573cf38568C59872ee48B6FED41F8A4c
+```
+
+The schema endpoint that used to return `Could not load contract schema` now
+returns all four methods with correct signatures — `evaluate` (write),
+`get_decision`, `has_decision`, `get_rounds` (views).
+
+### Two independent faults, both fixed
+
+**Fault 1 — the contract was on the v0.2.x SDK surface.** Covered in Session 10;
+the migration was already done and is what made this deploy possible.
+
+**Fault 2 — `--fee-value` alone is not a valid fee setup.** Even with the
+contract fixed, the deploy reverted:
+
+```
+Transaction reverted: EVM tx 0x9221d5… FeeValueMustBeNonZero(1)
+```
+
+`--fee-value 10000000000000000` was passed and made no difference — the fee
+*value* was never the constraint. The `--fee-value` flag alone builds a
+**default** distribution (`rotations: [0]`, zero `executionBudgetPerRound`), and
+the FeeManager rejects that. Confirmed by reading the transaction the CLI
+simulated: it went to the consensus contract with `value: 0x0`.
+
+**Fix:** `genlayer estimate-fees --json` returns a real distribution — notably
+`rotations: ["3"]` and `executionBudgetPerRound: 25000000000000000` — plus a
+matching `feeValue: 100000000000010352`. Passing both via `--fees` deployed on
+the first try. Strip the `policy` block the estimate also returns; deploy does
+not accept it.
+
+### Corrections to earlier sessions — both were wrong
+
+1. **Session 9 recorded that `estimate-fees` "cannot help" on studio-dev**
+   because the RPC lacks `sim_getFeeConfig`. **That is false now** — it returns a
+   full distribution and policy, and it is where the working values came from.
+   Acting on that stale negative delayed this fix.
+2. **Session 9's control — "a trivial contract with the same `Depends` header
+   fails identically, so the contract is not the problem" — was invalid.** The
+   control shared the exact defect under test (the v0.2.x header), so it proved
+   a *shared cause*, not innocence. The contract **was** the problem. The lesson
+   is recorded in `MEMORY.md`: **a control must differ from the suspect in the
+   dimension under test.**
+
+Also worth stating plainly: the `FINALIZED` + `NO_MAJORITY` + `votes_committed:
+0` signature that Session 9 read as "studio-dev is not validating" is the
+signature of a **transaction that could not pay its fee**. It is not a dead
+network, and it had been masking the real fault for two sessions.
+
+### CLI account alignment — three things, all silent when wrong
+
+The user funded `0xe5Fe9119…a7b` (`.secrets/deployer.json`) on studio-dev. Three
+separate misalignments had to be cleared, none of which names itself:
+
+| Problem | Symptom | Fix |
+|:--|:--|:--|
+| CLI pointed at **studionet 61999** | `account show` reported **0 GEN for a funded account** | `genlayer network set studio-dev` |
+| Active account was `default` (unfunded) | Deploy from the wrong key | `genlayer account use deployer` |
+| Account `locked` | Cannot sign | `genlayer account unlock --account deployer --password …` |
+
+`genlayer account show` prints address, balance, network, chainId and lock status
+together, so it catches all three at once. **Run it before every deploy.**
+
+### Done
+
+- **Wrote `genlayer-studio-dev-deploy-issues.md`** — a standalone, self-contained
+  troubleshooting playbook at the repo root, at the user's request. It documents
+  both failures, the full rename table, the correct deploy sequence, the
+  verification requirements, the dead ends that waste time, and the debugging
+  method — written for someone with no context on this project, because the same
+  two faults will hit any GenLayer project deploying to studio-dev.
+- **Corrected `docs/DEPLOY.md`** — the whole "blocked by the network" section is
+  superseded, and the stale `estimate-fees` claim is flagged as false in place
+  rather than quietly deleted, so anyone holding the old belief sees the
+  correction.
+- Rewrote the deploy section around the two gates (account/network alignment,
+  and the explicit fee distribution) with the working command.
+
+### Not done
+
+- **The Base escrow is still not deployed**, but it is now *unblocked* — it was
+  waiting on a GenLayer address, and one exists. This is the next step.
+- Vercel env vars follow the escrow address, so they are still unset.
+- `genlayer-known-money-rails-issues.md` still shows its Issue 1 snippet in the
+  old bare-`u256` v0.2 idiom; the pattern is correct, only the spelling is stale.
+
+---
+
+## 2026-09-11 — Session 10
+
+The session that finally explained the `Could not load contract schema` error.
+Session 9 called the studio-dev deploy "blocked by the network"; it was not. It
+was **our contract being written against an SDK surface studio-dev does not
+serve**, which is a repository bug and was fixable here.
+
+### The finding: GenLayer has two incompatible SDK surfaces
+
+The user supplied a contract that deploys fine through the studio-dev web
+interface. Diffing it against ours isolated everything:
+
+| | ours (and every public doc) | the working example |
+|:--|:--|:--|
+| header | `py-genlayer:1jb45aa8…` | `py-genlayer:5jycge4q…` |
+| import | `from genlayer import *` | `import genlayer as gl` |
+| base class | `gl.Contract` | `gl.contract.Contract` |
+
+`1jb45aa8…` selects the **v0.2.x** runner; `5jycge4q…` selects **v0.3.0**.
+studio-dev serves only the latter. So the contract's names never resolved, and
+the Studio reported it as a *schema* failure — which reads like a syntax error
+and sent several sessions looking for a malformed class declaration that was
+never there. **The contract was never malformed; it was stale.**
+
+The authoritative source is `sdk.genlayer.com/main/executors/v0.3/`.
+`docs.genlayer.com` is stale and still documents the old surface, and so does
+GenLayer's own Claude Code `write-contract` plugin. The full rename table is now
+in `MEMORY.md`.
+
+**☠️ The rename hides one real trap.** `gl.vm.run_nondet` **changed meaning**:
+it used to be the *safe* variant and is now the *unsafe* one, with the safe one
+moved to `run_nondet_default`. Old code calling it still compiles and still runs
+— it just silently stops validating. The correct migration is the 1:1 pairing
+`run_nondet_unsafe → run_nondet`, which is what `recourse_judgment.py` uses.
+`__on_errored_message__` was removed outright.
+
+### Done
+
+- **Migrated `genlayer/contracts/recourse_judgment.py`** to v0.3.0, **name-only**.
+  Every rename in the table applied; **no semantic change**. Deliberately *not*
+  done: `run_nondet_unsafe → run_nondet_default`, which would have been a silent
+  upgrade from unsafe to safe validation. Also added: `@gl.evm.contract_interface`
+  is unchanged in v0.3.0, confirmed present in the SDK.
+- **Rewrote `genlayer/contracts/gen_sender.py`** against v0.3.0.
+- **Fixed the SDK stub in `genlayer/tests/test_judgment_logic.py`.** The contract
+  now does `import genlayer as gl`, so `gl.contract` resolves to the *submodule*
+  `genlayer.contract` — the stub had to attach names to the module object, not to
+  a `gl` attribute. The stub deliberately does **not** provide the old flat names,
+  so any drift back to v0.2.x fails the import loudly instead of passing quietly.
+- **All 11 judgment-logic tests pass after the migration** — which is the
+  evidence that the rename preserved behaviour rather than merely importing.
+- **Rewrote `docs/GEN_SENDER.md`**, which had carried two actively wrong claims
+  (that the contract should drop its `Depends` header, and that `u256` is
+  unexported). Both were unjustified inferences from a stale doc page.
+
+### The funding problem, and its real shape
+
+A CLI deploy from the keystore account `0xa881365a…466d` ended `FINALIZED` /
+`NO_MAJORITY` / `votes_committed: 0` / `activator: ''`. That is **not** a network
+fault: studio-dev charges a GenLayer **consensus fee from a real GEN balance**
+even though EVM gas is free (`eth_gasPrice` is `0x0`). An account with 0 GEN
+cannot pay it, so no validator activates the tx — and the failure never says
+"insufficient funds". That presentation is what made it look like a dead network
+for two sessions.
+
+**Fix:** the repo's deployer key (`.secrets/deployer.json`) was imported into the
+CLI as the account **`deployer`**, and set active:
+
+```
+genlayer account import --name deployer --private-key 0x2d70…1a1d --password recourse-testnet-local
+```
+
+The derivation produced `0xe5fe9119000c9e1113dc504891a83da7bbaa7a7b`, matching
+`.secrets/deployer.json` exactly — so the key is confirmed correct, and the
+wallet the user faucets in a browser is now the same account the CLI spends from.
+**Nothing else stood in the way.** Faucet that address on studio-dev and the
+deploy works.
+
+**Consequence: `GenSender` is off the critical path.** It was written because
+`default` looked unfundable. With `deployer` active and faucetable directly, no
+sender contract is needed. It stays in the repo as a working demo of the
+IC → EOA `emit_transfer` pattern, and `docs/GEN_SENDER.md` now says so at the top
+rather than presenting itself as the unblocker.
+
+### Not done
+
+- **Still no GenLayer contract address on studio-dev.** The blocker is now purely
+  the faucet claim, which is a user action — the code side is finished.
+- **The Base escrow deploy still waits on that address** (`sourceContract` is
+  immutable), and Vercel env vars depend on the escrow address in turn.
+- `genlayer-known-money-rails-issues.md` still shows its Issue 1 snippet in the
+  old bare-`u256` v0.2 idiom. The *pattern* it documents is correct and `gen_sender.py`
+  follows it; only the snippet's spelling is stale.
 
 ---
 

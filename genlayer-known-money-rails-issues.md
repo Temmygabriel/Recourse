@@ -22,9 +22,17 @@ an LP) have **no intelligent contract deployed at them**. So both of these are w
 EOA payee:
 
 ```python
-# ❌ WRONG for an EOA payee
-gl.get_contract_at(payee_address).emit_transfer(value=u256(amount))
+# ❌ WRONG for an EOA payee  (shown in v0.3.0 spelling)
+gl.contract.get_at(payee_address).emit_transfer(value=gl.u256(amount))
 ```
+
+> **SDK surface note.** These snippets use the **v0.3.0** names
+> (`import genlayer as gl`, `gl.contract.get_at`, `gl.u256`), because that is what
+> **studio-dev serves**. Older material — including `docs.genlayer.com` — writes
+> `gl.get_contract_at(...)` and a bare `u256(...)`. The *pattern* below is
+> identical on both surfaces; only the spelling differs. See
+> [`genlayer-studio-dev-deploy-issues.md`](./genlayer-studio-dev-deploy-issues.md)
+> for the full rename table and the `gl.vm.run_nondet` meaning-change trap.
 
 That compiles to an **IC→IC PostMessage**. An empty address cannot receive it. The child
 transfer errors; your contract's internal ledger has already been debited; the wallet is
@@ -43,8 +51,8 @@ class _EoaPay:
     class Write:
         pass
 
-# ✅ CORRECT for an EOA payee
-_EoaPay(payee_address).emit_transfer(value=u256(amount))
+# ✅ CORRECT for an EOA payee  (v0.3.0 spelling)
+_EoaPay(payee_address).emit_transfer(value=gl.u256(amount))
 ```
 
 External messages execute **only on finality**, so state is fully committed before the
@@ -52,7 +60,7 @@ transfer runs — you keep the reentrancy safety that `on='finalized'` used to g
 
 ### How to check for it in your project
 ```bash
-grep -rn "get_contract_at" --include=*.py .
+grep -rn "get_contract_at\|contract\.get_at" --include=*.py .
 ```
 Every hit that targets is a wallet address rather than a deployed contract needs to move to
 the stub rail. Then verify live: take a money-out transaction hash and enumerate its
@@ -94,7 +102,7 @@ transaction, record why, and return normally.
 def _reject_payable(self, reason: str, job_key: str = "") -> None:
     paid = int(gl.message.value)
     if paid > 0:
-        _EoaPay(gl.message.sender_address).emit_transfer(value=u256(paid))
+        _EoaPay(gl.message.sender_address).emit_transfer(value=gl.u256(paid))
     self.payable_rejections[f"{key}|{job_key}"] = (
         f"{reason} — rejected and refunded {paid} atto in this transaction; "
         f"the contract retained nothing"
@@ -145,7 +153,7 @@ moved.** A parent can finalize successfully while
    misses it.
 
 ### Quick applicability checklist for the other project
-- [ ] Any `get_contract_at(...).emit_transfer(...)` where the target is a wallet → **Issue 1**.
+- [ ] Any `get_contract_at(...).emit_transfer(...)` / `contract.get_at(...).emit_transfer(...)` where the target is a wallet → **Issue 1**.
 - [ ] Any `@gl.public.write.payable` that can `raise` → **Issue 2**.
 - [ ] Any payout/refund path tested only by "the tx succeeded" → **Issue 3**.
 - [ ] Any payable method that also runs an LLM/web consensus call → consider splitting it.

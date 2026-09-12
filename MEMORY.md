@@ -4,7 +4,7 @@ Durable project memory. Read this first when resuming work. It records
 **decisions and constraints**, not a work log — for "what happened when", see
 [PROGRESS.md](./PROGRESS.md).
 
-Last updated: 2026-09-11
+Last updated: 2026-09-11 (Session 10 — v0.3.0 SDK migration; CLI `deployer` account)
 
 ---
 
@@ -89,6 +89,111 @@ Source: https://docs.genlayer.com/developers/consensus-v06-migration
 | Appeal rounds | Verified escalation is **5 → 11 → 23** validators. Never hardcode a smaller sequence, never assume a fixed appeal duration — read it from protocol state. |
 | Storage | Studio-dev may reset. Bradbury is the durable target only once v0.6 is promoted there. |
 
+### Deploying to studio-dev — the two gates, both now proven
+
+**✅ RecourseJudgment is live: `0x0f385a4e7400a0693776D19102e0be75D334ce1c`**
+(tx `0x7cc0dbff…7c45`, `FINALIZED` · `MAJORITY_AGREE`, 5/5 votes revealed,
+activator `0x6760cDeC573cf38568C59872ee48B6FED41F8A4c`). Reached 2026-09-11 after
+two independent faults were fixed. Full runbook in `docs/DEPLOY.md`.
+
+**Gate 1 — the CLI must be pointed at the right account AND the right network.**
+Three things that fail silently and separately:
+
+| Check | Command | Note |
+|:--|:--|:--|
+| Network | `genlayer network set studio-dev` | The CLI defaults to **studionet 61999**. `account show` against the wrong network reports a **0 GEN balance for a funded account** — that is a network mismatch, not an empty wallet. |
+| Active account | `genlayer account use deployer` | `default` and `deployer` both exist; only `deployer` (`0xe5Fe9119…a7b`) is funded. |
+| Unlocked | `genlayer account unlock --account deployer --password …` | Deploy needs the key in the OS keychain. |
+
+`genlayer account show` prints address, balance, network, chainId and lock status
+together — **run it before every deploy.** It catches all three at once.
+
+**Gate 2 — `--fee-value` alone is NOT a valid fee setup.**
+It builds a *default* distribution (`rotations: [0]`, zero
+`executionBudgetPerRound`), and the FeeManager rejects that with
+**`FeeValueMustBeNonZero(1)`** (selector `0x632be5a1`). The name is misleading:
+the fee *value* was never the problem and raising it changes nothing — the
+**distribution** was.
+
+```bash
+genlayer estimate-fees --json     # returns {distribution, feeValue, policy}
+genlayer deploy --contract <path> --fees "$(cat fees.json)"
+```
+
+Pass the returned `distribution` and `feeValue` **unchanged**, and **strip the
+`policy` block** — `estimate-fees` returns it but deploy does not accept it. The
+working distribution is not all-zeros: it carries `rotations: ["3"]` and a real
+`executionBudgetPerRound` (`25000000000000000` in our run) with
+`feeValue: "100000000000010352"` (~0.0001 GEN against a 20 GEN balance).
+
+> **Correction:** an earlier session recorded that `estimate-fees` *"cannot help"*
+> because studio-dev's RPC lacks `sim_getFeeConfig`. **That is false as of
+> 2026-09-11** — the command returns a full distribution and policy. Do not
+> reason from that older note.
+
+**Read the revert before choosing a fix — the two errors mean opposite things:**
+
+| Revert | Meaning | Fix |
+|:--|:--|:--|
+| `FeeValueMustBeNonZero(1)` | The **distribution** is default/empty | Pass a real estimate (above) |
+| execution / out-of-budget | The distribution is fine but **`executionBudgetPerRound` is too low for this contract** | Raise `executionBudgetPerRound` *and* `feeValue` together |
+
+### ⚠️ GenLayer has TWO incompatible SDK surfaces, and studio-dev only serves v0.3.0
+
+**This was the root cause of every `Could not load contract schema` failure.**
+The contract was not malformed — it was written against a surface the network
+does not serve. Nothing in the public docs says this clearly, which is why it
+cost several sessions.
+
+| | **v0.2.x** — these docs, and every GenLayer doc page | **v0.3.0** — what studio-dev actually runs |
+|:--|:--|:--|
+| `Depends` header | `py-genlayer:1jb45aa8…` | `py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng` |
+| import | `from genlayer import *` | `import genlayer as gl` |
+| base class | `gl.Contract` | `gl.contract.Contract` |
+| IC interface | `@gl.contract_interface` | `@gl.contract.interface` |
+| get existing IC | `gl.get_contract_at(a)` | `gl.contract.get_at(a)` |
+| deploy from IC | `gl.deploy_contract(…)` | `gl.contract.deploy(…)` |
+| proxy | `gl.ContractProxy` | `gl.contract.Proxy` |
+| events | `gl.Event` | `gl.chain.Event` |
+| storage types | `gl.DynArray` / `gl.Array` / `gl.TreeMap` | `gl.storage.DynArray` / `gl.storage.Array` / `gl.storage.TreeMap` |
+| storage opt-in | `gl.storage.allow_storage` | `gl.storage.allow` |
+| raw message | `gl.message_raw` | `gl.message.raw` |
+| user error | `gl.advanced.user_error_immediate(…)` | `gl.vm.UserError.immediate(…)` |
+| user error payload | `UserError(msg).message` | `UserError(data).data` |
+| raw event | `gl.advanced.emit_raw_event(…)` | `gl.chain.Event.emit_raw(…)` |
+| tracing | `gl.trace(…)` / `gl.trace_time_micro()` | `gl.vm.trace(…)` / `gl.vm.trace_time_micro()` |
+| **nondet, unsafe** | `gl.vm.run_nondet_unsafe(fn, val)` | **`gl.vm.run_nondet(fn, val)`** |
+| **nondet, safe** | `gl.vm.run_nondet(fn, val)` | **`gl.vm.run_nondet_default(fn, val)`** |
+
+**☠️ THE TRAP — `gl.vm.run_nondet` silently changed meaning.** In v0.2.x it was
+the *safe*, sandboxed-validator variant. In v0.3.0 that name belongs to the
+*unsafe* variant, and the safe one moved to `run_nondet_default`. Old code that
+calls `gl.vm.run_nondet` still compiles and still runs — it just quietly stops
+validating. Always migrate `run_nondet_unsafe → run_nondet` (a true 1:1 rename);
+never `run_nondet → run_nondet_default` reflexively. **`recourse_judgment.py`
+uses `gl.vm.run_nondet` deliberately, preserving its original unsafe semantics.**
+
+**Also: `__on_errored_message__` was removed in v0.3.0.** Do not reintroduce it.
+
+**Not renamed** — `@gl.evm.contract_interface` is unchanged, and so are
+`@gl.public.view`, `@gl.public.write`, `@gl.public.write.payable`,
+`gl.nondet.exec_prompt`, `gl.vm.Return` (`.calldata`), `gl.vm.Result`,
+`gl.vm.UserError`.
+
+**`import genlayer as gl` binds `gl` to the PACKAGE**, so `gl.contract`, `gl.vm`,
+`gl.storage`, `gl.nondet`, `gl.evm`, `gl.message` are top-level *submodules* of
+`genlayer` — not attributes nested under some `gl` object. `gl.Address`,
+`gl.u256`, `gl.u32` are package-level type aliases.
+
+**Where the truth lives:** `sdk.genlayer.com/main/executors/v0.3/` is
+authoritative. `docs.genlayer.com` is **stale** — its pages still show the
+left-hand column, which is what makes this trap so easy to walk into. GenLayer's
+own `write-contract` Claude Code plugin is *also* on the stale surface.
+
+**Both contracts are migrated as of 2026-09-11** (`gen_sender.py`,
+`recourse_judgment.py`) and the 11 judgment-logic tests still pass, which is the
+evidence that the rename preserved behaviour.
+
 ### genlayer-js 2.0.0-rc.1 — the surface, read out of the published package
 
 Verified 2026-09-10 by downloading the tarball and inspecting `dist/`. This is not recalled from the docs, and it **contradicts** them in two places. The package is 185 KB / 27 files; `npm pack genlayer-js@2.0.0-rc.1` needs no install.
@@ -119,6 +224,38 @@ Verified 2026-09-10 by downloading the tarball and inspecting `dist/`. This is n
 | Deployer | `0xe5Fe9119000C9E1113dc504891A83Da7bbaa7a7b` | `.secrets/deployer.json` |
 | Relayer signer | `0x49B4f09C5894c1C90B0ca9099AF3De0Faf7f3037` | `.secrets/relayer.json` |
 | Demo (browser) | `0x0DE10708F8c6DF7b73068d53def715A70C0f340D` | `.secrets/demo.json` |
+
+### The GenLayer CLI's own accounts — two of them, and the active one is what matters
+
+The CLI keeps its own keystores in **`C:\Users\USER\.genlayer\keystores\`**, which
+is *outside this repo*. `genlayer account list` shows them; the **`*` marks the
+active one, and the active one is the account that pays for and signs every
+deploy.**
+
+| CLI name | Address | Notes |
+|:--|:--|:--|
+| `default` | `0xa881365a99d77be904e414ae610e22938bb0466d` | The original keystore. Encrypted, **password not recorded anywhere**. Never successfully funded. |
+| **`deployer`** | `0xe5fe9119000c9e1113dc504891a83da7bbaa7a7b` | **Imported 2026-09-11 from `.secrets/deployer.json`, and now active.** Same key as the repo deployer, so the MetaMask wallet the user faucets and the account the CLI spends from are one and the same. Keystore password `recourse-testnet-local`. |
+
+**Why this mattered:** a deploy run from `default` ended
+`NO_MAJORITY` / `votes_committed: 0` / `activator: ''` on studio-dev, because
+studio-dev charges a GenLayer consensus fee from a **real GEN balance** even
+though EVM gas is free (`eth_gasPrice` is `0x0`). An unfunded account cannot pay
+that fee, so no validator ever activates the transaction. The error surfaces as a
+silent non-activation, **not** as insufficient funds — which is what made it
+look like a network fault for several sessions.
+
+**Unify on the deployer account.** Do not faucet `0xa881…466d` and expect the
+CLI to spend it while `deployer` is active — or vice versa. `genlayer account
+use <name>` switches, and `genlayer account show` prints the address and balance
+of whichever is active.
+
+> `docs/GEN_SENDER.md` describes a payable contract for forwarding GEN to an
+> address you name. It was written when `default` was active and appeared
+> unfundable. **With `deployer` active and faucetable directly, GenSender is no
+> longer on the critical path** — keep it as a demo of IC→EOA value transfer, but
+> do not treat it as the deploy unblocker.
+
 
 The relayer address must be passed to the escrow constructor. Regenerate the
 deployer/relayer pair with `node scripts/gen-wallet.mjs --out .secrets`, or add
@@ -173,8 +310,8 @@ starts failing on gas, that is the wallet to top up, not the deployer.
 |:--|:--|
 | Base Sepolia USDC | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 | RecourseEscrow (Base Sepolia) | _not yet deployed_ |
-| GenLayer judgment contract (studio-dev 61997) | _deploy blocked — see CRITICAL PATH; no validator activates_ |
-| GenLayer judgment contract (studionet 61999) | `0x3bb55747305282DBDbD6baC4215f4796b0Bc12C6` — **wrong chain for the submission**, kept only as proof the contract deploys |
+| GenLayer judgment contract (studio-dev 61997) | **`0x0f385a4e7400a0693776D19102e0be75D334ce1c`** — deployed 2026-09-11, `FINALIZED` · `MAJORITY_AGREE` |
+| GenLayer judgment contract (studionet 61999) | `0x3bb55747305282DBDbD6baC4215f4796b0Bc12C6` — **wrong chain for the submission**, kept only as evidence that studionet serves the *v0.2.x* runner |
 
 ---
 
@@ -270,29 +407,37 @@ docs/        DATA_MODEL.md, SECURITY.md, DEPLOY.md
      came back `0x0` on a transaction that succeeded, so gas really is free.
      That is what made "studio-dev needs no faucet" look true, and **it is
      false**: the GenLayer fee deposit is paid from a real balance. Measured
-     2026-09-11 — the CLI keystore account `0xa881365a…466d` holds **0 GEN** and
-     every deploy from it ends `NO_MAJORITY` with **no activator**; the account
-     that succeeded, `0x81D6bF84…93f4`, holds **48.6 GEN** and its transaction
-     returned `status: 0x1`. A deploy with no fee reverts
-     `FeeValueMustBeNonZero(1)`, and with a zero balance the fee cannot be paid
-     at all, so the fee *amount* makes no difference (1 wei and 0.01 GEN behave
-     identically). `estimate-fees` cannot help: the public RPC has no
-     `sim_getFeeConfig` and no `gen_dbg_traceTransaction`. **Fix: fund
-     `0xa881365a99d77be904e414ae610e22938bb0466d` with GEN on studio-dev.**
-  3. **studio-dev activates no validator for an unfundable transaction.** Every
-     attempt ends `status: FINALIZED`, `result_name: 'NO_MAJORITY'`,
+     2026-09-11 — an unfunded account ends every deploy `NO_MAJORITY` with **no
+     activator**; the account that succeeded, `0x81D6bF84…93f4`, holds
+     **48.6 GEN** and its transaction returned `status: 0x1`. A deploy with no
+     fee reverts `FeeValueMustBeNonZero(1)`, and with a zero balance the fee
+     cannot be paid at all, so the fee *amount* makes no difference (1 wei and
+     0.01 GEN behave identically). `estimate-fees` cannot help: the public RPC
+     has no `sim_getFeeConfig` and no `gen_dbg_traceTransaction`.
+     **Fix (applied 2026-09-11): the CLI now has a second account, `deployer`
+     (`0xe5Fe9119…a7b`), imported from `.secrets/deployer.json` and set active.
+     Faucet that address and the deploy proceeds.** See the CLI-accounts table
+     under *Key addresses and paths*.
+  3. **An unfunded transaction is never activated, and it does not say so.**
+     Every attempt ends `status: FINALIZED`, `result_name: 'NO_MAJORITY'`,
      `num_of_rounds: '0'`, `votes_committed: '0'`, with `activator` and
      `last_leader` both empty. **This is a symptom of (2), not a separate
      fault** — the earlier reading of it as "studio-dev is not validating" was
      wrong, and the network is fine: a funded account transacted successfully
      on it in the same window. A 300-block scan finding only our own
      transactions is explained by the network being nearly idle, not broken.
-  3b. **The contract is NOT the problem — proven with a control.** A 12-line
-     trivial contract carrying the same `Depends` header fails *identically*
-     from our account. So neither `recourse_judgment.py`, its `Depends` header,
-     nor GenVM contract loading is implicated. Anyone debugging this again
-     should reach for that control first; it kills the most expensive
-     hypothesis in one deploy.
+  3b. **☠️ RETRACTED — the control was invalid, and the conclusion it supported
+     was wrong.** An earlier session ran a 12-line trivial contract "carrying the
+     same `Depends` header" from our account, saw it fail identically, and
+     concluded *"the contract is NOT the problem"*. **That inference does not
+     hold:** the control shared the exact defect it was meant to isolate — the
+     v0.2.x `Depends` header (`1jb45aa8…`), which studio-dev does not serve. Two
+     things broken the same way fail the same way; that is agreement, not
+     exoneration. The schema error **was** the contract, and Session 10 fixed it.
+     **The lesson to keep: a control must differ from the suspect in the
+     dimension under test.** A control that shares the suspect's most likely
+     fault tests nothing, and a green-looking "it fails the same way" is
+     evidence of *shared cause*, not of innocence.
   4. **The Bradbury block is arithmetic, not a mystery.** The stranded tx at
      nonce 284 bid 0.17322855 gwei. Replacement needs a **10% bump**
      (0.1906 gwei) and the network only suggests 0.1875 gwei — it misses by
@@ -302,10 +447,18 @@ docs/        DATA_MODEL.md, SECURITY.md, DEPLOY.md
 
   **Deploy-proven:** the judgment contract *does* deploy. On studionet (61999) it
   reached `MAJORITY_AGREE` at **`0x3bb55747305282DBDbD6baC4215f4796b0Bc12C6`**.
-  That address is on the wrong chain for the submission, but it is hard evidence
-  that the contract, its `Depends` header and its fee path are all sound — and
-  it means the remaining studio-dev failure has a known-good control to compare
-  against.
+  That address is on the wrong chain for the submission and cannot be used, but
+  the run carries a fact that matters: **it succeeded while the contract still
+  carried the v0.2.x `Depends` header.**
+
+  **Therefore the two networks serve different SDK runners.**
+  **studionet (61999) serves v0.2.x; studio-dev (61997) serves v0.3.0.** This is
+  the single fact that makes every earlier observation coherent: the same file
+  deployed on one and failed `Could not load contract schema` on the other, and
+  no amount of fee-tuning or retrying could have closed that gap. **A contract
+  may not be portable across the two networks** — migrate before moving a
+  contract between them, and never treat a studionet success as evidence that
+  studio-dev will accept the same bytes.
 - **Issue 4 from `genlayer-known-money-rails-issues.md` is unmeasured for us.**
   Bradbury rejects deploys whose **compiled artifact** exceeds ~39,869 B.
   `recourse_judgment.py` is 21,296 B of *source*; the artifact size is what

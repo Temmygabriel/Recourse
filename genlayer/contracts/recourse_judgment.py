@@ -1,4 +1,5 @@
-# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
+# v0.3.0
+# { "Depends": "py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng" }
 """
 Recourse — judgment layer.
 
@@ -51,7 +52,7 @@ ON WHAT THIS CONTRACT CANNOT DO — read before claiming otherwise:
     Do not describe check 3 as "pinning against the purchase".
 """
 
-from genlayer import *
+import genlayer as gl
 import hashlib
 import json
 
@@ -237,11 +238,11 @@ def _clamp(raw, criteria_count: int) -> dict:
     }
 
 
-class RecourseJudgment(gl.Contract):
+class RecourseJudgment(gl.contract.Contract):
     # verdict JSON (canonical, sorted keys) keyed by the escrow-derived key
-    decisions: TreeMap[str, str]
+    decisions: gl.storage.TreeMap[str, str]
     # how many times each key has been evaluated
-    rounds: TreeMap[str, u32]
+    rounds: gl.storage.TreeMap[str, gl.u32]
 
     def __init__(self):
         pass
@@ -272,9 +273,9 @@ class RecourseJudgment(gl.Contract):
 
         rubric = package.get("rubric")
         if not isinstance(rubric, list):
-            raise gl.UserError("rubric must be a list")
+            raise gl.vm.UserError("rubric must be a list")
         if not (MIN_CRITERIA <= len(rubric) <= MAX_CRITERIA):
-            raise gl.UserError(f"rubric must have {MIN_CRITERIA}-{MAX_CRITERIA} items")
+            raise gl.vm.UserError(f"rubric must have {MIN_CRITERIA}-{MAX_CRITERIA} items")
         rubric = [self._require_rubric_item(item, i) for i, item in enumerate(rubric)]
 
         # Internal consistency: each text field must hash to the commitment
@@ -284,15 +285,15 @@ class RecourseJudgment(gl.Contract):
         self._require_hash_match("delivery_hash", delivery_notes, package)
         self._require_hash_match("dispute_hash", dispute_notes, package)
         if _rubric_hash(rubric) != _norm_hash(package.get("rubric_hash")):
-            raise gl.UserError("rubric_hash does not match the rubric in this package")
+            raise gl.vm.UserError("rubric_hash does not match the rubric in this package")
 
         disputed = package.get("disputed_indices")
         if not isinstance(disputed, list) or len(disputed) == 0:
-            raise gl.UserError("disputed_indices must name at least one criterion")
+            raise gl.vm.UserError("disputed_indices must name at least one criterion")
         disputed_indices = sorted({int(i) for i in disputed})
         for i in disputed_indices:
             if i < 0 or i >= len(rubric):
-                raise gl.UserError("disputed criterion out of range")
+                raise gl.vm.UserError("disputed criterion out of range")
 
         prompt = self._build_prompt(
             _clean(promise_text),
@@ -330,7 +331,7 @@ class RecourseJudgment(gl.Contract):
                     return False
             return True
 
-        raw = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
+        raw = gl.vm.run_nondet(leader_fn, validator_fn)
 
         # --- back in deterministic context: repair, then store ---------------
         verdict = _clamp(raw, len(rubric))
@@ -338,9 +339,9 @@ class RecourseJudgment(gl.Contract):
 
         self.decisions[purchase_key] = payload
         if purchase_key in self.rounds:
-            self.rounds[purchase_key] = self.rounds[purchase_key] + u32(1)
+            self.rounds[purchase_key] = self.rounds[purchase_key] + gl.u32(1)
         else:
-            self.rounds[purchase_key] = u32(1)
+            self.rounds[purchase_key] = gl.u32(1)
 
         return payload
 
@@ -356,10 +357,10 @@ class RecourseJudgment(gl.Contract):
         return purchase_key in self.decisions
 
     @gl.public.view
-    def get_rounds(self, purchase_key: str) -> u32:
+    def get_rounds(self, purchase_key: str) -> gl.u32:
         if purchase_key in self.rounds:
             return self.rounds[purchase_key]
-        return u32(0)
+        return gl.u32(0)
 
     # -----------------------------------------------------------------------
     # Input handling (deterministic context only)
@@ -376,11 +377,11 @@ class RecourseJudgment(gl.Contract):
         """
         value = package.get(key)
         if not isinstance(value, str):
-            raise gl.UserError(f"{key} must be a string")
+            raise gl.vm.UserError(f"{key} must be a string")
         if not value.strip():
-            raise gl.UserError(f"{key} is blank")
+            raise gl.vm.UserError(f"{key} is blank")
         if len(value) > max_len:
-            raise gl.UserError(f"{key} exceeds {max_len} characters")
+            raise gl.vm.UserError(f"{key} exceeds {max_len} characters")
         return value
 
     def _require_rubric_item(self, item, index: int) -> str:
@@ -390,17 +391,17 @@ class RecourseJudgment(gl.Contract):
         where "which item" is the actionable part of the complaint.
         """
         if not isinstance(item, str):
-            raise gl.UserError(f"rubric item {index} must be a string")
+            raise gl.vm.UserError(f"rubric item {index} must be a string")
         if not item.strip():
-            raise gl.UserError(f"rubric item {index} is blank")
+            raise gl.vm.UserError(f"rubric item {index} is blank")
         if len(item) > MAX_RUBRIC_ITEM_CHARS:
-            raise gl.UserError(f"rubric item {index} exceeds {MAX_RUBRIC_ITEM_CHARS} characters")
+            raise gl.vm.UserError(f"rubric item {index} exceeds {MAX_RUBRIC_ITEM_CHARS} characters")
         return item
 
     def _require_hash_match(self, field: str, text: str, package: dict) -> None:
         """Reject unless sha256(text) equals the hash in the same package."""
         if _sha256_hex(text) != _norm_hash(package.get(field)):
-            raise gl.UserError(f"{field} does not match the text in this package")
+            raise gl.vm.UserError(f"{field} does not match the text in this package")
 
     # -----------------------------------------------------------------------
     # The prompt
