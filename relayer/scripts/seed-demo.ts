@@ -317,8 +317,24 @@ async function waitForStage(id: bigint, expected: Stage, timeoutMs = 90_000): Pr
 // ---------------------------------------------------------------------------
 
 const NOW = BigInt(Math.floor(Date.now() / 1000));
-const DELIVERY_DEADLINE = NOW + 3n * 86_400n; // 3 days out
-const REVIEW_WINDOW = 172_800n; // 2 days, inside the [1 hour, 30 days] bound
+
+/**
+ * Both windows are set to outlast the demo, not to look realistic.
+ *
+ * They are frozen into each offer at creation and the escrow has no edit
+ * function, so a window that lapses is a stage the demo can no longer act on —
+ * and the first version of this file used 3 days and 2 days, which meant the
+ * DELIVERED purchase stopped being acceptable or disputable two days after the
+ * seed ran, while the submission deadline was still five days out. A judge
+ * clicking that row would have found the one action it exists to show gone.
+ *
+ * The contract's bounds are [1 hour, 30 days] for the review window, so 14 days
+ * is inside them and a real product could plausibly offer it. The delivery
+ * deadline is not windowed at all, but 30 days costs nothing on a testnet whose
+ * only job here is to keep the rows clickable through mid-September.
+ */
+const DELIVERY_DEADLINE = NOW + 30n * 86_400n; // 30 days out
+const REVIEW_WINDOW = 1_209_600n; // 14 days, inside the [1 hour, 30 days] bound
 
 /**
  * One slot per purchase id, and how far to drive it.
@@ -561,6 +577,22 @@ async function driveTo(
   // --- purchase -----------------------------------------------------------
   if (RANK[at] < RANK.FUNDED) {
     const p = await readPurchase(id);
+
+    // The deadline is frozen at creation and the escrow refuses a purchase
+    // after it, so an offer that has lapsed cannot be revived — and the revert
+    // it would produce says "deadline passed", which reads like a bug in this
+    // script rather than an expired fixture. Say which it is.
+    const now = BigInt(Math.floor(Date.now() / 1000));
+    if (p.deliveryDeadline <= now) {
+      throw new Error(
+        `#${slot.id} is still OPEN but its delivery deadline passed ` +
+          `${(now - p.deliveryDeadline) / 86_400n} days ago. The escrow will not accept a ` +
+          `purchase after the deadline, and the deadline was frozen when the offer was ` +
+          `created — this offer cannot be revived. Add a new slot to SLOTS instead of ` +
+          `re-running this one.`,
+      );
+    }
+
     console.log(`  + #${slot.id} purchase — ${usdc(p.price)} from the buyer`);
     if (broadcast) {
       await approveIfNeeded(buyer, p.price, 'price');

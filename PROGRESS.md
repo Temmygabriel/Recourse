@@ -154,6 +154,39 @@ reads the chain first and does only what is missing, so a run that dies on a
 flaky RPC continues rather than fighting its own half-finished work. Running it
 again now does nothing at all.
 
+### ⚠️ The seeded windows expire, and #5's expires before the deadline
+
+The first version of the seeder used a **3-day delivery deadline** and a **2-day
+review window** — reasonable-looking numbers, chosen to look like a real product
+rather than to survive a hackathon. Both are baked into each offer at creation
+and the escrow has no edit function, so they are already fixed on chain:
+
+| # | Window | Closes | What is lost after that |
+|:--|:--|:--|:--|
+| 4 (FUNDED) | 3-day delivery deadline | ~Sept 15 | buyer can no longer be delivered *to*; `claimDeadlineRefund` opens instead |
+| 5 (DELIVERED) | 2-day review window | **~Sept 14** | **the buyer can no longer accept or dispute it** |
+
+**#5 is the one that matters.** It was seeded specifically so accept-and-dispute
+could be demonstrated live, and recording will most likely happen Sept 15–16.
+After Sept 14 the row still shows *"Delivered — review window open"*'s stage, but
+`isReviewOpen` is false: the buyer's two buttons are gone and the seller gets
+`claimReviewTimeout` instead. The list still has a DELIVERED row — the content
+request is met — but the *accept* path, which is the product's happy path, would
+have to be demonstrated some other way.
+
+**The constants are now 30 days and 14 days** in `seed-demo.ts`, so any future
+run — or a run against a redeployed escrow — produces rows that outlast the
+submission. That does **not** retroactively fix #2–#6: they keep the windows they
+were created with. The seeder also now refuses to purchase an offer whose
+deadline has lapsed and says why, instead of surfacing the contract's own
+`deadline passed` revert as if it were a bug in the script.
+
+**If a DELIVERED row that can still be accepted is wanted for recording**, the
+fix is one slot: `createOffer` → `purchase` → `submitDelivery` with the new
+14-day window, which the resumable seeder already knows how to do. Flagged
+rather than done, because it permanently adds a row to the demo's front page and
+that is the user's call.
+
 ### ⚠️ Purchase #2 still carries the corrupted rubric, and it is visible
 
 #2's first criterion is stored as **two fragments** — *"The Figma file contains
