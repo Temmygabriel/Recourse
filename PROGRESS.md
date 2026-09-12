@@ -19,6 +19,8 @@ Work log, newest first. For durable decisions and constraints see
 | Cross-language hash vectors | 🟢 done and locked from both sides |
 | Relayer | 🟢 written; **30/30 pure-logic tests passing locally**; SDK surface verified against the published package |
 | Frontend (8 pages) | 🟢 **8 pages typecheck clean (`tsc --noEmit` exit 0) AND build (`next build` exit 0)** — verified locally 2026-09-11 |
+| Frontend — stale reads after a write | 🟢 **handled since Session 14** — every write names what it made true and waits for the chain to agree before the page acts on it |
+| Frontend — wallet connect (Brave / multi-wallet) | 🟡 **rewritten in Session 14** (EIP-6963 discovery, picker, deferred network switch); typechecks and builds, **but has not been exercised against a real wallet** — see Session 14 for what to check |
 | CI (GitHub Actions) | 🟢 **all 5 jobs green on GitHub's runners (57 s)** — the workflow-scope blocker was local, see Session 13 |
 | End-to-end loop | 🟢 **CLOSED — a real dispute settled on Base Sepolia with real USDC; `settle()` mined, verdict carried back from studio-dev** |
 | README / security narrative | 🟢 README, `docs/SECURITY.md`, `docs/DEPLOY.md` all written — every cross-link resolves |
@@ -88,6 +90,151 @@ Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 > was blocked by two fixable things in our own code — a v0.2.x SDK surface and a
 > default fee distribution. Full retraction in Session 11 and in
 > [`genlayer-studio-dev-deploy-issues.md`](./genlayer-studio-dev-deploy-issues.md).
+
+---
+
+## 2026-09-12 — Session 14
+
+Both of this session's jobs came from the user using the app in a real browser,
+not from reading the code: *"some browser like brave had this error"* and
+*"serious metamask warning when trying to connect wallet … like we could lose
+funds kind of warning"*. They turned out to be two independent faults in the
+wallet surface.
+
+> **⚠️ Read this before trusting either fix: neither was observed working in a
+> browser.** This machine cannot run the frontend (8 GB; no `next dev`, no
+> `next build` locally by the user's standing instruction), so everything below
+> is verified by `tsc --noEmit` exiting 0 and by CI's `next build` — that is,
+> verified to *compile*, not verified to *behave*. The two faults were diagnosed
+> from the code and from what the user reported, and the diagnosis is specific
+> enough to be checkable, but the confirmation has to come from the user opening
+> Brave and MetaMask. What to look for is at the end of this entry.
+
+### Fault 1 — with two wallets installed, the app could connect to the wrong one
+
+`window.ethereum` is a single property. MetaMask and Brave Wallet both write to
+it, so it holds whichever extension loaded last — which has nothing to do with
+which one the user is looking at. The app would ask Brave Wallet for an account
+for somebody who had MetaMask open, and the two then disagree about address,
+balance and network for the rest of the session. Some pairs throw straight out
+of `eth_requestAccounts` with **"Already processing eth_requestAccounts"** —
+one wallet still holding the request the other is making.
+
+Not a bug in any one wallet: it is what a single shared property does, and it is
+why EIP-6963 exists.
+
+**Fixed with EIP-6963** (`frontend/src/lib/eip6963.ts`). Each wallet announces
+`{info, provider}` on an `eip6963:announceProvider` event, so nothing is
+overwritten and two wallets produce two usable providers. One detail that is easy
+to get wrong and would have made the whole thing silently useless: **wallets
+announce once on load, long before a Next.js page hydrates**, so a listener
+attached on mount hears nothing. The app must *dispatch*
+`eip6963:requestProvider` to make them re-announce, then collect for 250 ms.
+
+Discovery finds wallets; it does not choose between them. One wallet has no
+choice to offer and is used silently. Several do, and only the person at the
+keyboard can answer — so the app asks once (`components/WalletPicker.tsx`),
+remembers the answer by `rdns`, and does not ask again.
+
+### Fault 2 — the first click on "Connect wallet" asked the user to accept a risk of losing funds
+
+`connect()` called `eth_requestAccounts` and then **immediately switched
+networks**. On a wallet that has never seen Base Sepolia, that second step is an
+*add-chain* dialog — and wallets treat adding a chain as a security decision,
+because an RPC endpoint the wallet does not recognise can lie about balances and
+rewrite transactions. So the dialog says so, in the strongest terms it has. The
+user clicked one button labelled "Connect wallet" and was asked to accept a risk
+of losing funds, on a screen that never explained why.
+
+Nothing in that dialog is inaccurate. **It was the wrong moment**, and two
+things caused it:
+
+1. **The switch itself.** It now happens at the write (`writeEscrow`,
+   `ensureAllowance`), where the user is already signing something and a network
+   prompt is self-explanatory, plus an explicit "Switch to Base Sepolia" button
+   in the header for anyone who would rather settle it first. Connecting
+   connects.
+2. **What was being written into the wallet.** `wallet_addEthereumChain` was
+   handed `NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL` — a variable that may hold a
+   **private keyed endpoint**. That publishes a credential to a third party
+   which now stores it and uses it for every request the wallet makes, *and* it
+   points the wallet at an endpoint it cannot match to chain id 84532, which is
+   itself a trigger for the warning. The wallet now always gets
+   `CANONICAL_BASE_SEPOLIA_RPC`. The app's own reads still use `RPC_URL` and are
+   unaffected.
+
+### Also fixed in the same pass — the UI asserting what it never checked
+
+Same class of mistake as the stale-read bug in the second half of this session,
+so it is listed together:
+
+- **`chainOk` started `true` and was never probed.** A wallet on the wrong
+  network was reported as fine until something failed. It is now set from an
+  `eth_chainId` read as soon as a provider is bound, and the "cannot answer"
+  case deliberately leaves the last known answer alone rather than assuming.
+- **"Wrong network — reconnect"** told users to do the one thing that cannot
+  change a network. It is now a banner naming the chain, with a switch button.
+- **A declined switch (4001)** was reported as "could not switch", which hides
+  the one fact that matters — the user said no — and sends them hunting a fault
+  that is not there.
+
+### The stale-read fix — the product decision, made
+
+Session 13 flagged this as needing a decision rather than a patch: confirmation
+wait, retry, or explicit "pending" state. **It shipped as the first and third
+together**, because they answer different questions. The wait is what makes the
+page correct; the pending state is what stops the user acting on it while it is
+not.
+
+`frontend/src/lib/settle.ts` re-reads on a 2 s loop for up to 60 s after a
+write, until the chain agrees with what the write made true. Each call site
+passes its own predicate (`stageIs<Purchase>(STAGE.FUNDED)` and friends) rather
+than having one inferred — only the call site knows what it asked the chain to
+do, and a wrong guess here would silently accept the exact stale state this
+exists to catch, while still typechecking and still resolving. `settling` is
+kept distinct from `loading`: "there is plenty to show, but it is about to
+change and must not be acted on" is not the same as "nothing to show yet".
+
+On timeout the page says so honestly (`SETTLE_TIMEOUT_NOTE`) instead of
+asserting either outcome: the transaction *did* confirm by that point, so
+reporting failure would be wrong and reporting success would be a guess.
+
+`deliver` and `dispute` also wait for `DELIVERED`/`DISPUTED` before
+`router.push`, because the page they land on reads once on mount. There the
+result is deliberately **not** acted on — the write has succeeded, and the
+destination's 15 s poll is the backstop.
+
+### Commits
+
+- `0e353ff` — *Stop showing the state from before the user's own transaction*
+- `967a4fb` — *Connect to one wallet on purpose, and stop asking for the network first*
+
+Both pushed. `frontend/src/lib/wallet.tsx`, `chain.ts`, `escrow.ts`,
+`components/AppHeader.tsx`, `components/WalletPicker.tsx`, `app/layout.tsx`,
+`lib/settle.ts`, `lib/eip6963.ts`, `lib/useAsync.ts`, `lib/status.ts`, and the
+three write-path pages.
+
+### What is NOT proven, and what to check in a browser
+
+- **CI is green on both commits** — run `34706570150`, all 5 jobs, 56 s, including
+  `frontend (typecheck + next build) in 52s`. So the new wallet modules compile
+  and the app builds with them in the tree. That is the strongest evidence
+  available without a browser, and it is not the same as the browser test.
+- **Nothing here has been exercised against a real wallet.** Specifically
+  unverified: that Brave Wallet and MetaMask both answer the EIP-6963 request;
+  that the picker renders with real icons; that a remembered `rdns` survives a
+  reload; and that the MetaMask warning is actually gone.
+
+To check, in a browser with both wallets installed:
+
+1. Load the deployed site. The first click on **Connect wallet** should open the
+   picker, and it should list both wallets by name.
+2. Pick one. The account shown should be the account in *that* wallet. Reload —
+   it should reconnect to the same wallet with no picker.
+3. If MetaMask shows a network warning at any point, the moment it appears
+   matters: it should now only ever appear when a transaction is being signed,
+   or after pressing "Switch to Base Sepolia" — never on plain connect.
+4. With only one wallet installed, the picker should never appear.
 
 ---
 
@@ -183,6 +330,11 @@ excluded `.github/workflows/ci.yml` *locally*, so the file was never committed.
 Removed, workflow committed, and CI has since run green.
 
 ### Known issue, not yet fixed: the frontend shares the stale-read problem
+
+> **SUPERSEDED — fixed in Session 14.** Kept because the reasoning is the
+> reason the fix looks the way it does: the product decision named here
+> (confirmation wait *and* an explicit pending state) is what shipped, rather
+> than a bare retry.
 
 The lagging-RPC class above is **not** relayer-specific. The frontend
 (`frontend/src/lib/escrow.ts`) reads the same way. A user who disputes and

@@ -4,8 +4,11 @@ Durable project memory. Read this first when resuming work. It records
 **decisions and constraints**, not a work log — for "what happened when", see
 [PROGRESS.md](./PROGRESS.md).
 
-Last updated: 2026-09-12 (Session 13 — **the loop is closed**: a real dispute
-settled on Base Sepolia with real USDC. See *The loop is proven* below.)
+Last updated: 2026-09-12 (Session 14 — the frontend's two browser-facing defects
+are fixed: **stale reads after a write**, and **wallet connect**. See *The
+wallet surface* and *The frontend reads the verdict from Base* below. The loop
+itself was closed in Session 13: a real dispute settled on Base Sepolia with
+real USDC — see *The loop is proven*.)
 
 ---
 
@@ -57,6 +60,8 @@ the promise was kept; Base moves the money.
 | D16 | **`contracts/foundry.lock` is gitignored; CI pins `forge-std@v1.16.2` in the workflow instead.** | Forge writes the lockfile's dependency key with the **host's path separator** — a Windows-generated lockfile says `"lib\\forge-std"`, a Linux one says `"lib/forge-std"`. Committing it puts a platform-specific file in a repo whose CI runs on Linux, and every CI run rewrites it. Pinning the tag buys the same reproducibility without the churn. |
 | D17 | **`genlayerKey()` renders the escrow address lowercase, and lowercase is authoritative.** | Not a free choice — it is what the contract's own hex encoder emits. What makes it safe is that **neither consumer rebuilds the string**: `relayer/src/escrow.ts` and `frontend/src/lib/escrow.ts` both call the view function and pass the result through, so only one rendering exists. `docs/DATA_MODEL.md` §8 now states the casing explicitly; it had been silent, which is what let a test drift onto EIP-55 checksummed and fail. |
 | D18 | **In Foundry tests, never leave an external call inside the argument list of the call you are arming `vm.prank`/`vm.expectRevert` for.** Compute the signature into a local on the line above. | Solidity evaluates arguments before the call, and a pending `vm.prank` or `vm.expectRevert` is consumed by the **next call of any kind — a `view` function included**. So `escrow.settle(d, _sig(d))`, where `_sig` calls `escrow.hashDecision`, spends the prank on `hashDecision`: `settle` then runs as the test contract and reverts `"not relayer"`, and the expectRevert is spent on a call that did *not* revert, so the test fails with "next call did not revert as expected". Both symptoms are one bug and **neither points at the contract** — this cost 37 red tests on 2026-09-11 that were all the harness's fault. The file was fixed by hoisting; keep the convention when adding tests. |
+| D19 | **Wallet selection is EIP-6963 discovery, and with more than one wallet the app asks — it never falls back to `window.ethereum`** | `window.ethereum` is a single property, so with two wallets installed it holds whichever extension loaded last, which has nothing to do with which one the user is looking at. Using it connects people to a wallet they are not looking at. EIP-6963 gives one provider per wallet, the choice is remembered by `rdns` (stable, unlike the per-load `uuid`), and `window.ethereum` is consulted **only** when discovery finds nothing — which means a browser with one pre-6963 wallet in it. Extends D8: still no wagmi, no RainbowKit; the discovery is ~90 lines in `frontend/src/lib/eip6963.ts`. |
+| D20 | **`connect()` asks for an account and nothing else. The network is switched at the write, or by an explicit button.** | Connecting used to switch chains immediately, which on a wallet that has never seen Base Sepolia is an *add-network* dialog — and wallets treat adding a chain as a security decision, so the user's first click produced a "you could lose funds" warning on a screen that never explained why. The dialog is accurate; the moment was wrong. Raising it at the write means the user is already signing something and the prompt is self-explanatory. **Do not "simplify" this back into `connect()`.** |
 
 ---
 
@@ -390,9 +395,87 @@ both are *not* contract bugs:
 **How the code handles it:** the E2E driver retries pre-broadcast failures but
 never a mined revert (`MinedRevert` is terminal — a revert is a real answer),
 and `waitForStage()` polls instead of reading once. The relayer retries on its
-next tick. **The frontend does not yet handle this** and can show a user the
-state from before their own transaction — a known open issue, see PROGRESS
-Session 13.
+next tick. **The frontend now handles it too** (Session 14): every write names
+what it just made true and `frontend/src/lib/settle.ts` re-reads on a short loop
+until the chain agrees, with the page showing an explicit "waiting for this page
+to catch up" state and, on timeout, saying so rather than asserting either
+outcome. See *The frontend waits for the chain after every write* below.
+
+---
+
+## The frontend waits for the chain after every write
+
+`frontend/src/lib/settle.ts` + `useAsync().reloadUntil`.
+
+The receipt proves a transaction was *mined*, not that the node answering the
+next `eth_call` has seen it. So after each write the page names the state it
+just created — `stageIs<Purchase>(STAGE.FUNDED)`, `…(STAGE.SETTLED)`,
+`…(STAGE.DISPUTED)` — and re-reads on a 2s loop for up to 60s until the chain
+agrees. Two screens (`deliver`, `dispute`) also wait before navigating, because
+the page they land on reads once on mount.
+
+**The predicate is always passed at the call site, never inferred.** A wrong
+guess would silently accept the very stale state this exists to catch, and it
+would typecheck and resolve either way — so the call site is the only place
+that knows what it asked the chain to do.
+
+If the wait times out the page says so honestly (`SETTLE_TIMEOUT_NOTE`): the
+transaction *did* confirm, so reporting failure would be wrong, and reporting
+success would be a guess. `settling` is deliberately distinct from `loading` —
+"there is plenty to show, but it is about to change and must not be acted on".
+
+---
+
+## The wallet surface — the trap that comes with two installed wallets
+
+`frontend/src/lib/eip6963.ts`, `wallet.tsx`, `components/WalletPicker.tsx`.
+
+**The failure this exists to prevent:** every wallet used to inject at
+`window.ethereum`, so with MetaMask and Brave Wallet both installed only one
+wins — the last extension to load. The app then asks the *wrong wallet* for an
+account, and the two disagree about address, balance and network for the whole
+session. Some pairs throw straight out of `eth_requestAccounts` with *"Already
+processing eth_requestAccounts"* — one wallet still holding the request the
+other is making. The user reported this from Brave.
+
+**The fix:** EIP-6963. Each wallet announces `{info, provider}` on
+`eip6963:announceProvider`; nothing is overwritten and both providers are
+usable. Announcements are only sent once on load — long before a Next.js page
+hydrates — so the app **dispatches `eip6963:requestProvider`** to make them
+re-announce, then collects for 250ms. Discovery finds; it does not choose.
+
+**Rules that must not be undone:**
+
+- One wallet → used silently. Several → **ask**, once, and remember by `rdns`.
+- `window.ethereum` is consulted **only** when discovery found nothing.
+  Binding it while a choice is pending would read an account out of a wallet
+  the user never picked — the original bug, reintroduced.
+- `rememberProvider(null)` means "deliberately none", which is *not* the same
+  as "not decided yet" — hence the separate `selectionMade` flag in `chain.ts`.
+- The picker is persisted in `localStorage` because connections are not. Without
+  it the picker would reappear on every reload, which is worse than no picker.
+
+**MetaMask's "you could lose funds" dialog** was caused by `connect()` switching
+networks. On a wallet that has never seen Base Sepolia that is an *add-chain*
+prompt, and wallets warn hard about it because an unrecognised RPC endpoint can
+lie about balances and rewrite transactions. Two causes, both fixed:
+
+1. The switch moved to the write path (+ an explicit header button), so the
+   prompt now arrives when the user is already signing something.
+2. `wallet_addEthereumChain` was being handed
+   `NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL` — which may be a **private keyed
+   endpoint**. That publishes a credential to a third party that stores and
+   reuses it, *and* gives the wallet an endpoint it cannot match to chain id
+   84532, which is itself a trigger for the warning. **The wallet always gets
+   `CANONICAL_BASE_SEPOLIA_RPC` (`https://sepolia.base.org`) now.** Our own
+   reads are unaffected.
+
+Also fixed in the same pass, same class of mistake — the UI asserting what it
+never checked: `chainOk` started `true` and was never probed (now set from
+`eth_chainId`); "Wrong network — reconnect" told users to do the one thing that
+cannot change a network (now a banner naming the chain, with a switch button);
+and a declined switch (4001) was reported as "could not switch", hiding the one
+fact that matters.
 
 ---
 
