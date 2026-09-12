@@ -39,6 +39,7 @@ import { STAGE, type Purchase } from '@/lib/abi';
 import { formatUsdc } from '@/lib/chain';
 import { confirm, fetchPurchase, isSameAddress, writeEscrow } from '@/lib/escrow';
 import { EVIDENCE_ASK } from '@/lib/status';
+import { pollUntil, stageIs } from '@/lib/settle';
 import { describeError, useAsync } from '@/lib/useAsync';
 import { useWallet } from '@/lib/wallet';
 
@@ -143,6 +144,20 @@ export default function DeliverPage() {
       // cleaning them up here would mean judging something the seller never
       // wrote. Whitespace is only *checked*, never stripped.
       await confirm(await writeEscrow(owner, 'submitDelivery', [BigInt(id), notes]));
+
+      // Wait for the chain to actually read back as DELIVERED before leaving.
+      // The receipt proves the transaction was mined, not that the replica
+      // answering the next read has caught up — and the page we are about to
+      // land on reads once on mount. Navigating early means arriving at a page
+      // that says this offer is still awaiting delivery, moments after the
+      // seller delivered it.
+      //
+      // The result is deliberately not acted on. The delivery HAS succeeded —
+      // the receipt proved that — so staying here and reporting a failure would
+      // be wrong, and this page has nothing left to offer once it is done. The
+      // destination polls every 15s, which is the backstop for the rare case
+      // where even 60s of re-reading is not enough.
+      await pollUntil(() => fetchPurchase(id), stageIs<{ stage: number }>(STAGE.DELIVERED));
       router.push(`/offers/${id}`);
     } catch (e) {
       setProblem(describeError(e));

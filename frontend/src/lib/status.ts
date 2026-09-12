@@ -176,6 +176,38 @@ export const TRUST_BOUNDARY_NOTE =
   'The relayer that carries a verdict from GenLayer to Base is a trusted prototype ' +
   'component. This is a testnet build and no real funds are involved.';
 
+// --- Waiting for the chain to catch up -------------------------------------
+
+/**
+ * Shown while a page re-reads after one of the user's own transactions.
+ *
+ * This exists because a confirmed transaction is not the same as a readable
+ * one. Base Sepolia's public RPC load-balances across replicas that do not
+ * agree on recent state, so the read issued right after a write can be served
+ * by a node that has not seen it yet. Without this note the user sees the
+ * screen they were looking at *before* they paid, and reasonably concludes the
+ * payment failed.
+ *
+ * The wording says "this page", not "the network" or "your transaction" —
+ * their transaction is already confirmed and nothing is wrong with it. What is
+ * behind is the view they are looking at.
+ */
+export const SETTLING_NOTE = 'Confirmed. Waiting for this page to catch up…';
+
+/**
+ * Shown when the chain never did catch up within the wait.
+ *
+ * Deliberately does not claim success or failure. The transaction did confirm
+ * — that was checked before this point — but the page cannot yet prove what it
+ * did, and saying otherwise would be a guess. The standing poll re-reads every
+ * 15-20 seconds, so the honest thing is to say it is still catching up and let
+ * the next poll resolve it.
+ */
+export const SETTLE_TIMEOUT_NOTE =
+  'Your transaction was confirmed, but this page is still reading the state from ' +
+  'before it. The network can take a moment to catch up — reload in a few seconds ' +
+  'if this does not update on its own.';
+
 // --- Bits and criteria -----------------------------------------------------
 
 /** Indices set in a bitmap, as 0-based criterion indices. */

@@ -40,6 +40,7 @@ import {
   writeEscrow,
 } from '@/lib/escrow';
 import { BOND_RETURNED_NOTE, DISPUTE_PROMPT, reviewDeadlineOf } from '@/lib/status';
+import { pollUntil, stageIs } from '@/lib/settle';
 import { describeError, useAsync } from '@/lib/useAsync';
 import { useWallet } from '@/lib/wallet';
 
@@ -180,6 +181,15 @@ export default function DisputePage() {
           notes,
         ]),
       );
+
+      // The case page we are about to open reads once on mount, and the bond
+      // has just moved. Without this wait, a buyer who disputes can land on a
+      // case page still showing the review-window state — the exact stale read
+      // this project hit on its first live run, where an inspection straight
+      // after openDispute reported DELIVERED against a chain that already said
+      // DISPUTED. The dispute HAS succeeded by this point, so the result is not
+      // acted on; the case page's own poll is the backstop.
+      await pollUntil(() => fetchPurchase(id), stageIs<{ stage: number }>(STAGE.DISPUTED));
       router.push(`/case/${id}`);
     } catch (e) {
       setProblem(describeError(e));

@@ -42,6 +42,8 @@ import { RequirementList } from '@/components/RequirementList';
 import { STAGE, type Purchase } from '@/lib/abi';
 import {
   ESCROW_EXPLAINER,
+  SETTLING_NOTE,
+  SETTLE_TIMEOUT_NOTE,
   bitmapIndices,
   stageInfo,
   reviewDeadlineOf,
@@ -57,6 +59,7 @@ import {
   writeEscrow,
 } from '@/lib/escrow';
 import { formatUsdc } from '@/lib/chain';
+import { stageIs } from '@/lib/settle';
 import { describeError, useAsync } from '@/lib/useAsync';
 import { useWallet } from '@/lib/wallet';
 
@@ -66,7 +69,9 @@ export default function OfferPage() {
   const { account, connect, connecting } = useWallet();
 
   const read = useCallback(() => fetchPurchase(id), [id]);
-  const { data: purchase, error, loading, reload } = useAsync(read, [id], { pollMs: 15_000 });
+  const { data: purchase, error, loading, settling, reloadUntil } = useAsync(read, [id], {
+    pollMs: 15_000,
+  });
 
   const bond = useAsync(
     useCallback(
@@ -258,7 +263,8 @@ export default function OfferPage() {
             bond={bond.data ?? 0n}
             connecting={connecting}
             onConnect={connect}
-            onChanged={reload}
+            reloadUntil={reloadUntil}
+            settling={settling}
           />
         </aside>
       </div>
@@ -267,6 +273,18 @@ export default function OfferPage() {
 }
 
 // --- Actions ---------------------------------------------------------------
+
+/**
+ * The shape of `Actions.run`, named so the two claim components below cannot
+ * drift from it. When `run` grew its third argument, both of them had a
+ * hand-written copy of the old signature and both would have kept compiling
+ * while silently skipping the post-write stage check.
+ */
+type RunAction = (
+  label: string,
+  fn: (owner: Address) => Promise<void>,
+  reached: (value: Purchase | null) => boolean,
+) => Promise<void>;
 
 function Actions({
   id,
@@ -278,7 +296,8 @@ function Actions({
   bond,
   connecting,
   onConnect,
-  onChanged,
+  reloadUntil,
+  settling,
 }: {
   id: number;
   purchase: Purchase;
@@ -289,13 +308,29 @@ function Actions({
   bond: bigint;
   connecting: boolean;
   onConnect: () => Promise<Address | null>;
-  onChanged: () => void;
+  reloadUntil: (isSettled: (value: Purchase | null) => boolean) => Promise<boolean>;
+  settling: boolean;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
 
-  const run = async (label: string, fn: (owner: Address) => Promise<void>) => {
+  /**
+   * Run one action, then wait for the chain to agree that it happened.
+   *
+   * `reached` is the post-condition the action promises — the stage this
+   * purchase should be in once it lands. It is required rather than optional:
+   * every write on this page has one, and making it optional would let a new
+   * action silently skip the check that stops the user being shown a stale
+   * screen right after spending money.
+   */
+  const run = async (
+    label: string,
+    fn: (owner: Address) => Promise<void>,
+    reached: (value: Purchase | null) => boolean,
+  ) => {
     setError(null);
+    setWarning(null);
     let owner = account;
     if (owner === null) owner = await onConnect();
     if (owner === null) return;
@@ -303,7 +338,10 @@ function Actions({
     setBusy(label);
     try {
       await fn(owner);
-      onChanged();
+      // The receipt proves the transaction was mined; it does not prove the
+      // node answering our next read has seen it. Wait for the state itself.
+      const caughtUp = await reloadUntil(reached);
+      if (!caughtUp) setWarning(SETTLE_TIMEOUT_NOTE);
     } catch (e) {
       setError(describeError(e));
     } finally {
@@ -312,13 +350,17 @@ function Actions({
   };
 
   const pay = () =>
-    run('pay', async (owner) => {
-      // The escrow pulls the money with `transferFrom`, so the approval has to
-      // be in place first. `ensureAllowance` is a no-op when it already is.
-      const approval = await ensureAllowance(owner, purchase.price);
-      if (approval !== null) await confirm(approval);
-      await confirm(await writeEscrow(owner, 'purchase', [BigInt(id)]));
-    });
+    run(
+      'pay',
+      async (owner) => {
+        // The escrow pulls the money with `transferFrom`, so the approval has to
+        // be in place first. `ensureAllowance` is a no-op when it already is.
+        const approval = await ensureAllowance(owner, purchase.price);
+        if (approval !== null) await confirm(approval);
+        await confirm(await writeEscrow(owner, 'purchase', [BigInt(id)]));
+      },
+      stageIs<Purchase>(STAGE.FUNDED),
+    );
 
   const shortfall = balance !== null && balance < purchase.price;
 
@@ -337,6 +379,15 @@ function Actions({
       <DocHead title="What happens to the money" />
       <DocBody className="flex flex-col gap-3">
         {error !== null && <Notice tone="error">{error}</Notice>}
+
+        {/* The write confirmed but the RPC had not caught up. Said plainly
+            rather than left as a silent stale screen — see SETTLING_NOTE in
+            status.ts for why this case exists at all. `neutral`, not `error`:
+            the transaction succeeded, so colouring this red would tell the user
+            their payment failed when it did not. Notice carries role="status",
+            so a screen reader announces it without stealing focus. */}
+        {settling && busy === null && <Notice tone="neutral">{SETTLING_NOTE}</Notice>}
+        {warning !== null && <Notice tone="neutral">{warning}</Notice>}
 
         <p className="text-[13px] text-ink-muted">{ESCROW_EXPLAINER}</p>
 
@@ -381,9 +432,16 @@ function Actions({
               className="btn btn-secondary"
               disabled={busy !== null}
               onClick={() =>
-                void run('cancel', async (owner) => {
-                  await confirm(await writeEscrow(owner, 'cancelOffer', [BigInt(id)]));
-                })
+                void run(
+                  'cancel',
+                  async (owner) => {
+                    await confirm(await writeEscrow(owner, 'cancelOffer', [BigInt(id)]));
+                  },
+                  // cancelOffer sets the stage back to NONE (RecourseEscrow.sol
+                  // :363), so the page must wait for the offer to disappear
+                  // rather than re-offering the button.
+                  stageIs<Purchase>(STAGE.NONE),
+                )
               }
             >
               {busy === 'cancel' ? 'Cancelling…' : 'Cancel this offer'}
@@ -424,9 +482,13 @@ function Actions({
                   className="btn btn-primary"
                   disabled={busy !== null}
                   onClick={() =>
-                    void run('accept', async (owner) => {
-                      await confirm(await writeEscrow(owner, 'acceptDelivery', [BigInt(id)]));
-                    })
+                    void run(
+                      'accept',
+                      async (owner) => {
+                        await confirm(await writeEscrow(owner, 'acceptDelivery', [BigInt(id)]));
+                      },
+                      stageIs<Purchase>(STAGE.SETTLED),
+                    )
                   }
                 >
                   {busy === 'accept' ? 'Releasing…' : 'Accept — release the payment'}
@@ -498,7 +560,7 @@ function ClaimDeadlineRefund({
   ready,
 }: {
   id: number;
-  run: (label: string, fn: (owner: Address) => Promise<void>) => Promise<void>;
+  run: RunAction;
   busy: string | null;
   ready: boolean;
 }) {
@@ -509,9 +571,13 @@ function ClaimDeadlineRefund({
       disabled={busy !== null || !ready}
       title={ready ? undefined : 'Available once the delivery deadline passes'}
       onClick={() =>
-        void run('refund', async (owner) => {
-          await confirm(await writeEscrow(owner, 'claimDeadlineRefund', [BigInt(id)]));
-        })
+        void run(
+          'refund',
+          async (owner) => {
+            await confirm(await writeEscrow(owner, 'claimDeadlineRefund', [BigInt(id)]));
+          },
+          stageIs<Purchase>(STAGE.SETTLED),
+        )
       }
     >
       {busy === 'refund'
@@ -530,7 +596,7 @@ function ClaimReviewTimeout({
   ready,
 }: {
   id: number;
-  run: (label: string, fn: (owner: Address) => Promise<void>) => Promise<void>;
+  run: RunAction;
   busy: string | null;
   ready: boolean;
 }) {
@@ -541,9 +607,13 @@ function ClaimReviewTimeout({
       disabled={busy !== null || !ready}
       title={ready ? undefined : 'Available once the review window closes'}
       onClick={() =>
-        void run('timeout', async (owner) => {
-          await confirm(await writeEscrow(owner, 'claimReviewTimeout', [BigInt(id)]));
-        })
+        void run(
+          'timeout',
+          async (owner) => {
+            await confirm(await writeEscrow(owner, 'claimReviewTimeout', [BigInt(id)]));
+          },
+          stageIs<Purchase>(STAGE.SETTLED),
+        )
       }
     >
       {busy === 'timeout'
