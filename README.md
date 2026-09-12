@@ -172,21 +172,35 @@ Honest about what is proven and what is not.
 |:--|:--|
 | Base escrow | **Deployed to Base Sepolia** at `0x32288128Ff07Fc9e443161c1F336b784508a056A`. Compiles clean; **122/122 tests pass** (`forge test`). Runtime 16,651 B — 7,925 B under the EIP-170 limit. All seven immutables verified on-chain. |
 | GenLayer judgment contract | **Deployed to studio-dev (61997)** at `0x0f385a4e7400a0693776D19102e0be75D334ce1c` — `FINALIZED` · `MAJORITY_AGREE`, 5 validators, 5 votes revealed. The schema endpoint returns all four methods. |
-| Relayer | Written; logic tested without dependencies (30 tests). **Still has not run against a live GenLayer** — this is the significant gap. |
-| Frontend | Written; typechecks (`tsc --noEmit`) and builds (`next build`, 8 pages) locally against the locked dependencies. Not yet hosted. |
-| Deployed end-to-end demo | **Not yet exercised.** Both contracts are live, but no verdict has travelled from GenLayer to Base, and no money has moved. |
+| Relayer | Written; logic tested without dependencies (30 tests). **Has now run against a live GenLayer and settled a real dispute** — see below. |
+| Frontend | Written; typechecks and builds (`next build`, 8 pages). CI builds it on every push; not yet hosted. |
+| Deployed end-to-end demo | **✅ Exercised on 2026-09-12.** A real purchase ran offer → purchase → delivery → dispute on Base Sepolia, a verdict came back from studio-dev, and `settle()` mined — moving real testnet USDC. |
 
-**Be precise about what "deployed" does and does not mean here.** The two
-contracts exist on their chains and their immutable wiring is verified — that is
-real, and it was the hard part. But **nothing has completed the full loop**: the
-relayer has never carried a judgment to `settle()`, so the path that actually
-moves money is untested against a real network. Treat the deployment as
-infrastructure proven and the end-to-end flow as unproven.
+**The full loop has been run once, end to end, with money moving.** Purchase 1
+was disputed, judged, and settled:
+
+| | |
+|:--|:--|
+| Verdict (GenLayer) | `PARTIAL_REFUND`, `refund_bps` **3333**, criteria met `[true, true, false]` |
+| GenLayer tx | `0xcdf78c54…` — `FINALIZED · Accepted` |
+| Settlement (Base) | `0xc77820a0…` — block 46721614, **status 1 (success)** |
+| Paid out | buyer **1,916,500** (refund 1,666,500 + bond 250,000); seller **3,333,500** |
+
+The arithmetic is the escrow's own, decoded from the receipt's logs: the two
+payouts sum to exactly `price + bond` (5,250,000), the refund is exactly
+`3333 bps × 5,000,000 / 10000`, and the escrow is left holding **zero**. The
+criterion the judgment marked unmet is precisely the one the buyer disputed.
+
+**Be precise about what this does and does not mean.** The mechanism is proven:
+a verdict produced by GenLayer's validators can be carried to Base and can move
+money, and the escrow's checks accept it. It is **not** a claim that the system
+is production-ready, and it is **not** a claim that the relayer is trustless —
+it is a trusted prototype component, and this is testnet-only.
 
 Two further limits worth stating plainly:
 
-- The frontend was compiled in a scratch copy outside the repo (this is an 8 GB
-  Windows box), so its build is verified but it has never been served.
+- The frontend has never been served to a browser. CI builds it on every push
+  (this is an 8 GB Windows box, so the build runs on GitHub's runners).
 - The judgment contract is deployed to **studio-dev**, a preview network that
   **may reset**. The escrow's `sourceContract` is immutable, so a reset means
   redeploying the escrow too — it cannot be repointed.
