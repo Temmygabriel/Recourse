@@ -1,0 +1,227 @@
+name: ci
+
+# All heavy compute lives here, not on a developer laptop. The build machine for
+# this project is an 8 GB Windows box that cannot run `forge build`, `npm
+# install`, or `next build` — so the runner is the compiler, and a red check
+# here is the only signal that the tree actually builds.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Base escrow: compile, then run the state machine and the attack paths.
+  # ---------------------------------------------------------------------------
+  contracts:
+    name: contracts (forge build + test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Versions
+        run: forge --version
+
+      # `contracts/lib/` is gitignored — the escrow itself has zero external
+      # Solidity dependencies, so a clone builds without any submodules, and
+      # only the test suite needs forge-std. Installing it here (rather than
+      # committing it) keeps the shipped contract tree dependency-free.
+      #
+      # The tag is pinned rather than left to `latest` because `foundry.lock` is
+      # deliberately not committed: forge writes the dependency key with the
+      # host's path separator, so a lockfile generated on Windows would be
+      # rewritten by every Linux CI run. Pinning here buys the same
+      # reproducibility without the platform-specific file. `--no-commit` stops
+      # forge from staging a submodule that .gitignore already excludes.
+      - name: Install forge-std
+        run: forge install foundry-rs/forge-std@v1.16.2 --no-commit
+
+      - name: Build
+        run: forge build --sizes
+
+      - name: Test
+        run: forge test -vvv
+
+      - name: Gas snapshot
+        run: forge snapshot --check || true
+
+  # ---------------------------------------------------------------------------
+  # GenLayer judgment contract: the GenVM linter loads the exact SDK version
+  # named in the contract's `Depends` header, so this is also what confirms the
+  # pinned runner hash and the nondeterminism API names are real and not
+  # remembered from a different SDK line.
+  # ---------------------------------------------------------------------------
+  genlayer:
+    name: genlayer (genvm-lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Runs first, and with no dependencies, so a logic failure is reported
+      # even if the linter install or the SDK resolution breaks. This is the
+      # only place the contract's actual deterministic code is executed.
+      - name: Deterministic logic tests
+        run: python genlayer/tests/test_judgment_logic.py
+
+      - name: Install genvm-linter
+        run: pip install genvm-linter
+
+      # `check` runs both layers: fast AST safety checks, then full SDK
+      # semantic validation against the pinned runner.
+      - name: Lint and validate
+        run: genvm-lint check genlayer/contracts/recourse_judgment.py
+
+      - name: Extract ABI
+        run: genvm-lint schema genlayer/contracts/recourse_judgment.py --output /tmp/recourse_abi.json
+
+      - name: Show ABI
+        run: cat /tmp/recourse_abi.json
+
+  # ---------------------------------------------------------------------------
+  # The escrow and the judgment contract are the only two implementations of
+  # these hashes, in different languages on different chains, and neither can
+  # detect that the other started normalising text before hashing. The
+  # generator is the single source for both fixtures; this job proves the
+  # checked-in copies still match it.
+  # ---------------------------------------------------------------------------
+  vectors:
+    name: hash vectors (generator matches fixtures)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Regenerate
+        run: node scripts/gen-hash-vectors.mjs
+
+      - name: Checked-in fixtures must match the generator
+        run: |
+          if ! git diff --exit-code -- \
+              docs/vectors/hash-vectors.json \
+              contracts/test/HashVectors.generated.sol; then
+            echo "::error::Generated hash fixtures are stale. Run 'node scripts/gen-hash-vectors.mjs' and commit the result."
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Frontend. Guarded so the workflow is honest about what it actually checked
+  # rather than silently passing on a missing directory.
+  #
+  # NO ENVIRONMENT VARIABLES ARE SET HERE, ON PURPOSE. `next build` prerenders
+  # every page on the server, so an escrow address read at module scope would
+  # turn a forgotten Vercel setting into a failed deployment. `escrowAddress()`
+  # in src/lib/chain.ts resolves it on first use instead, and this job is what
+  # proves that: if someone ever moves that read back to the top level, this job
+  # goes red rather than Vercel going red.
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: frontend (typecheck + next build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: detect
+        run: |
+          if [ -f frontend/package.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "frontend/package.json not present yet — skipping" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - if: steps.detect.outputs.present == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      # `ci`, not `install`: it installs exactly the lockfile and fails if the
+      # lockfile and package.json disagree, which is the same thing Vercel does.
+      - if: steps.detect.outputs.present == 'true'
+        working-directory: frontend
+        run: npm ci
+      - if: steps.detect.outputs.present == 'true'
+        working-directory: frontend
+        run: npm run typecheck
+      - if: steps.detect.outputs.present == 'true'
+        working-directory: frontend
+        run: npm run build
+
+  # ---------------------------------------------------------------------------
+  # Relayer: the pure logic runs first and runs on a bare Node, with no install
+  # of any kind, so the commitment hashes and the coherence check are verified
+  # even if the registry is down or a dependency fails to resolve.
+  # ---------------------------------------------------------------------------
+  relayer:
+    name: relayer (tests + typecheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 24, not 22: the test harness runs the TypeScript sources directly
+      # through Node's own type stripping and installs a module-resolution hook
+      # with `module.registerHooks`, and `import.meta.main` is relied on by the
+      # key generator. All three are recent additions.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: relayer/package-lock.json
+
+      # No `npm ci` needed, and deliberately none: this proves the pure tests
+      # have no hidden dependency on node_modules.
+      - name: Pure logic tests (no dependencies)
+        working-directory: relayer
+        run: npm test
+
+      - name: Install
+        working-directory: relayer
+        run: npm ci
+
+      - name: Typecheck (build view)
+        working-directory: relayer
+        run: npm run typecheck
+
+      # Separate config, because the main one sets rootDir: "src" and cannot see
+      # the test tree.
+      - name: Typecheck (including tests)
+        working-directory: relayer
+        run: npm run typecheck:tests
+
+      - name: Build
+        working-directory: relayer
+        run: npm run build
+
+      # The sources import each other with `.ts` specifiers so Node can run them
+      # unbuilt; `rewriteRelativeImportExtensions` is supposed to have turned
+      # those into `.js` on the way out. If it silently did not, `npm start`
+      # would fail at runtime and nothing else here would notice.
+      - name: Emitted output must be ordinary ESM
+        working-directory: relayer
+        run: |
+          if grep -rn "from '\./[a-zA-Z]*\.ts'" dist/; then
+            echo "::error::dist/ still imports .ts specifiers — rewriteRelativeImportExtensions did not apply"
+            exit 1
+          fi
+          node --input-type=module -e "await import('./dist/log.js')"
