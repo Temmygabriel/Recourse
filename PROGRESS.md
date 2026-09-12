@@ -19,7 +19,8 @@ Work log, newest first. For durable decisions and constraints see
 | Cross-language hash vectors | 🟢 done and locked from both sides |
 | Relayer | 🟢 written; **30/30 pure-logic tests passing locally**; SDK surface verified against the published package |
 | Frontend (8 pages) | 🟢 **8 pages typecheck clean (`tsc --noEmit` exit 0) AND build (`next build` exit 0)** — verified locally 2026-09-11 |
-| CI (GitHub Actions) | ⚠️ file written, **cannot push** — token lacks `workflow` scope |
+| CI (GitHub Actions) | 🟢 **all 5 jobs green on GitHub's runners (57 s)** — the workflow-scope blocker was local, see Session 13 |
+| End-to-end loop | 🟢 **CLOSED — a real dispute settled on Base Sepolia with real USDC; `settle()` mined, verdict carried back from studio-dev** |
 | README / security narrative | 🟢 README, `docs/SECURITY.md`, `docs/DEPLOY.md` all written — every cross-link resolves |
 | docs/MONEY_RAILS_AUDIT.md | 🟢 written — Issues 1–2 clean, Issue 3's gap closed by `totalHeld()`, Issue 4 still flagged unmeasured |
 | GitHub push wired up | 🟢 working (code pushes fine; only `.github/workflows/` is blocked) |
@@ -58,6 +59,21 @@ Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 > it, but the source compiled is byte-identical to the repo's. See the Vercel
 > readiness note in Session 8 for what is still unproven.
 >
+> **The loop is closed.** As of Session 13 a real purchase ran the whole way:
+> offer → purchase → delivery → dispute on Base Sepolia, a GenLayer verdict on
+> studio-dev, and `settle()` mining back on Base — moving 5.25 USDC with
+> arithmetic that matches the verdict to the wei. The paragraph below, which
+> said *"Both contracts are deployed. The loop between them is not"*, is
+> **superseded** and kept only so the earlier reasoning is traceable.
+>
+> One honest caveat carries forward: **the relayer is a trusted prototype
+> component.** It is the only address that can call `settle()`, and a party who
+> controls it can withhold a verdict. It cannot fabricate one — every field is
+> checked against the escrow's own immutables and hashes, and the signature
+> must recover to the configured relayer — but "cannot lie" is not "cannot
+> stall". This is testnet-only, and the trust model is stated as such in
+> `docs/SECURITY.md`.
+
 > **Both contracts are deployed. The loop between them is not.**
 > `RecourseJudgment` is live on studio-dev (61997) and `RecourseEscrow` on Base
 > Sepolia, and the escrow's seven immutables were read back and verified against
@@ -72,6 +88,108 @@ Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 > was blocked by two fixable things in our own code — a v0.2.x SDK surface and a
 > default fee distribution. Full retraction in Session 11 and in
 > [`genlayer-studio-dev-deploy-issues.md`](./genlayer-studio-dev-deploy-issues.md).
+
+---
+
+## 2026-09-12 — Session 13
+
+### The end-to-end loop is closed, with real money
+
+**This is the session the project stopped being two verified halves.** A real
+purchase was driven from `createOffer` to `DISPUTED` and then settled by the
+relayer carrying a real GenLayer verdict back to Base Sepolia. Money moved.
+
+| Step | Chain | Evidence |
+|:--|:--|:--|
+| `createOffer` → `purchase` → `submitDelivery` → `openDispute` | Base Sepolia | tx mined, stage 4, 5.25 USDC held |
+| `evaluate(...)` | studio-dev 61997 | `0xcdf78c54…` — **FINALIZED · Accepted**, fee settled with refund |
+| `get_decision` reads back the verdict | studio-dev 61997 | `{criteria_met:[true,true,false], outcome:PARTIAL_REFUND, refund_bps:3333}` |
+| `settle(...)` | Base Sepolia | `0xc77820a0…` — **status 1 (success)**, block 46721614, gas 188,764 |
+
+**The settlement arithmetic, decoded from the receipt's own logs** — this is the
+claim worth checking, because it is the contract's math and not the relayer's:
+
+| Log | Raw | Decoded |
+|:--|:--|:--|
+| USDC escrow → buyer | `0x1d3e54` | **1,916,500** = refund 1,666,500 + bond 250,000 |
+| USDC escrow → seller | `0x32dd7c` | **3,333,500** = price 5,000,000 − refund |
+| `Settled(1, 3333, 3, …)` | `0x0d05` | refundBps **3333**, matching GenLayer exactly |
+
+`1,916,500 + 3,333,500 = 5,250,000` = price 5 USDC + bond 0.25 USDC, exactly.
+The refund is `3333 bps × 5,000,000 / 10000 = 1,666,500`, exactly. Final balances
+confirm it: seller `20,000,000 + 3,333,500 = 23,333,500`; buyer
+`20,000,000 − 5,000,000 − 250,000 + 1,916,500 = 16,666,500`. Escrow left with
+**0 USDC** and `totalHeld() == 0`.
+
+The verdict is coherent in a way worth noting: 2 of 3 criteria met (`110`) →
+seller keeps ⅔ → buyer refunded ⅓. The one criterion that failed is index 2,
+"delivered as a single PDF" — which is precisely the criterion the buyer
+disputed. The judgment contract's arithmetic is its own; the relayer passes
+`refund_bps` through rather than recomputing it.
+
+### Fixed: a hard 30-second ceiling on every finality wait
+
+**The one real defect this session found, and it was silent.** The first live
+run submitted the evaluation, got a tx hash, then threw:
+
+> `Timed out waiting for transaction 0xcdf78c… to reach "finalized" (current status: 5).`
+
+Status 5 is `ACCEPTED` — **not a failure**. The transaction finalized on its own
+shortly after, and `genlayer receipt` confirmed `Finalized · Accepted` with a fee
+refund of `542914600009529` wei. The relayer had been passing neither `interval`
+nor `retries` to the SDK wait call, so it inherited genlayer-js's defaults:
+`waitInterval: 3000`, `retries: 10` — ten 3-second sleeps and then a hard throw.
+A **30-second ceiling** on a wait that takes minutes on studio-dev.
+
+What makes it worth a careful fix rather than a bumped number is how it fails:
+the purchase is left in `evaluating` with a valid tx hash, so the *next* tick
+resumes and succeeds. The bug therefore presents as ordinary slowness rather
+than as a fixed timeout, and would have burned a tick and a redundant receipt
+read on **every settlement, forever**. Now 20 minutes at 5-second intervals,
+passed explicitly to both SDK spellings. The interval goes *up* because a
+finalized GenLayer transaction never un-finalizes — polling harder buys nothing.
+
+### Added: `relayer/scripts/e2e-live.ts`, and a compiler that can see it
+
+A state-driven live driver (539 lines) that walks a purchase as two different
+wallets from `createOffer` to `DISPUTED` and stops there, because everything past
+that point is the relayer's job. Re-running it resumes whatever the current
+purchase is doing rather than replaying steps. Two live-chain findings are baked
+into it:
+
+- **`nextPurchaseId` starts at 1, so `purchaseCount()` is NOT the latest id.**
+  Reading it that way points at id 0 — a permanently empty slot that returns a
+  zeroed struct rather than reverting. This is why the first run failed with
+  `purchase` reverting `"not open"` against a purchase that did not exist.
+- **Base Sepolia's public RPC load-balances across nodes with lagging state.**
+  It shows up twice: `eth_estimateGas` can revert against stale state
+  immediately after an `approve` that already landed, and *reads* can return
+  pre-transaction state right after a write succeeds. So the sender retries
+  pre-broadcast failures (never a mined revert — `MinedRevert` is terminal) and
+  stage waits poll instead of reading once.
+
+`scripts/**/*.ts` is now in `tsconfig.test.json`. The driver is imported by no
+test and never runs on a runner — it needs funded keys and a live escrow — so
+without that line it would be the only TypeScript in the repo no compiler ever
+sees, **and the one script that touches real funds is the worst place to let
+that happen.** Verified with `--listFiles` that it is genuinely compiled.
+
+### `gh` was never the blocker — resolved without user action
+
+The user asked what `gh` needed fixed. The answer is **nothing**: `gh auth
+status` shows scopes `gist, read:org, repo, workflow` — the `workflow` scope was
+already granted. The actual blocker was `.git/info/exclude` line 11, which
+excluded `.github/workflows/ci.yml` *locally*, so the file was never committed.
+Removed, workflow committed, and CI has since run green.
+
+### Known issue, not yet fixed: the frontend shares the stale-read problem
+
+The lagging-RPC class above is **not** relayer-specific. The frontend
+(`frontend/src/lib/escrow.ts`) reads the same way. A user who disputes and
+immediately opens the case page can be shown the state from *before* their own
+transaction. The relayer now polls past this; the frontend does not. Flagged here
+rather than silently fixed, because it needs a product decision — a
+confirmation wait, a retry, or an explicit "pending" state — not just a patch.
 
 ---
 

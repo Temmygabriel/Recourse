@@ -4,7 +4,8 @@ Durable project memory. Read this first when resuming work. It records
 **decisions and constraints**, not a work log — for "what happened when", see
 [PROGRESS.md](./PROGRESS.md).
 
-Last updated: 2026-09-11 (Session 10 — v0.3.0 SDK migration; CLI `deployer` account)
+Last updated: 2026-09-12 (Session 13 — **the loop is closed**: a real dispute
+settled on Base Sepolia with real USDC. See *The loop is proven* below.)
 
 ---
 
@@ -210,6 +211,7 @@ Verified 2026-09-10 by downloading the tarball and inspecting `dist/`. This is n
 | ⚠️ Enums are NOT on the main entry | `TransactionStatus`, `ExecutionResult`, `TransactionResult`, `TransactionHashVariant` are **runtime values only from `genlayer-js/types`**. The `.d.ts` of the main entry appears to export some of them, but the compiled `index.js` does not — importing them from `genlayer-js` typechecks and then yields `undefined`. Use `genlayer-js/types`, or string literals. |
 | Client methods (verified) | `readContract`, `writeContract`, `simulateWriteContract`, `deployContract`, `getTransaction`, `waitForTransactionReceipt({hash, waitUntil: 'decided'\|'finalized'})`, `waitForDecision`, `waitForFinalization`, `getContractSchema`, `getContractCode`, `canAppeal`, `getAppealCharge`, `appealTransaction`, `topUpFees`, `topUpAndSubmitAppeal`, `getRoundNumber`, `getRoundData`, `getLastRoundData`, `estimateTransactionFees`, `estimateTransactionFeesForWrite`, `estimateFeesDistribution`, `estimateTransactionFeesFromSimulation`, `getCurrentFeePolicy`, `getCurrentNonce`, `transfer`, `advanced.getTransactionLifecycle`. |
 | Deprecated but present | `initializeConsensusSmartContract`, `getMinAppealBond` (alias of `getAppealCharge`), `waitForTransactionReceipt({status})`. |
+| ⚠️ Wait calls have a **30-second ceiling by default** | `waitForFinalization` and `waitForTransactionReceipt` both default to `waitInterval: 3000` and `retries: 10` — ten 3-second sleeps, then a hard throw. That is a **30-second** timeout on a wait that takes minutes on studio-dev, and it cost a live run (Session 13). **Always pass `interval` and `retries` explicitly.** The relayer now uses 5 s × 240 = 20 min. The SDK's own error names the status it gave up at (`current status: 5`), and **status 5 is `ACCEPTED`, not a failure** — the tx may still finalize. |
 | Value literals | `ExecutionResult.FINISHED_WITH_RETURN = "FINISHED_WITH_RETURN"`, `TransactionStatus.FINALIZED = "FINALIZED"`, `TransactionHashVariant.LATEST_FINAL = "latest-final"`. |
 | Consequence for us | The relayer loads the SDK dynamically and duck-types every call, so an RC rename becomes a precise runtime error instead of a resolution failure. That choice is now known-correct: no code change was needed for the surface above beyond fixing the chain-name resolution. |
 
@@ -336,6 +338,61 @@ GenLayer contract still responds before a demo rather than assuming.
 | Relayer | `GENLAYER_CONTRACT_ADDRESS` | `0x0f385a4e7400a0693776D19102e0be75D334ce1c` |
 | Relayer | `GENLAYER_CHAIN` | `studioDevnet` |
 | Relayer | `RELAYER_PRIVATE_KEY_FILE` | `../.secrets/relayer.key` |
+
+---
+
+### The loop is proven — purchase 1, settled 2026-09-12
+
+The first complete run of the system, end to end, with real money. Kept here
+because it is the **reference case**: any future settlement can be checked
+against these numbers.
+
+| | |
+|:--|:--|
+| Purchase | id **1** (remember `nextPurchaseId` starts at **1**, so id 0 is a permanently empty slot and `purchaseCount()` is not the latest id) |
+| Seller / buyer | `0xe5Fe9119…a7a7b` / `0x0DE10708…f340D` |
+| Price / bond | 5.00 USDC / 0.25 USDC (500 bps) |
+| Verdict | `PARTIAL_REFUND`, `refund_bps` **3333**, `criteria_met` `[true,true,false]` |
+| GenLayer tx | `0xcdf78c54…` — FINALIZED · Accepted |
+| Base `settle()` tx | `0xc77820a0…` — block 46721614, gas 188,764, status 1 |
+| Paid out | buyer **1,916,500** (refund 1,666,500 + bond 250,000); seller **3,333,500** |
+| Decision digest | `0x48edbbba…` |
+
+**The invariant that makes this checkable:** `refund + bond = 1,916,500` and
+`seller = price − refund`, summing to exactly `price + bond = 5,250,000`. The
+escrow ends at **0 USDC** with `totalHeld() == 0`. If a future run settles with
+more or less than `price + bond` leaving the contract, something is wrong.
+
+**`DRY_RUN=true` in `relayer/.env` signs and simulates but never broadcasts.**
+It was used for the first live pass and then flipped to `false` for the real
+settlement. Note `dryRun` also forces `onceOnly` (`src/index.ts`), so a
+DRY_RUN invocation exits after one tick and cannot retry a timed-out finality
+in the same process — re-run it instead. State persists in
+`relayer/.relayer-state.json`, so a re-run resumes rather than re-spending the
+GenLayer fee.
+
+### ⚠️ Base Sepolia's public RPC has lagging replicas, and it bites twice
+
+`https://sepolia.base.org` load-balances across nodes that **do not agree on
+recent state**. Two distinct symptoms, both observed live in Session 13, and
+both are *not* contract bugs:
+
+1. **Spurious pre-broadcast reverts.** `eth_estimateGas` — which viem calls
+   before every write — can run against a replica that has not yet seen a
+   transaction that already landed. Observed as `openDispute` failing
+   `transferFrom failed` immediately after a successful `approve`, with the
+   allowance verifiably correct on-chain. Re-simulating the identical call
+   returned `0x` (success).
+2. **Stale reads.** `getPurchase` and `purchaseCount` can return
+   pre-transaction state right after a write succeeds. Observed as `inspect()`
+   printing `DELIVERED`/bond 0 immediately after `openDispute` had mined.
+
+**How the code handles it:** the E2E driver retries pre-broadcast failures but
+never a mined revert (`MinedRevert` is terminal — a revert is a real answer),
+and `waitForStage()` polls instead of reading once. The relayer retries on its
+next tick. **The frontend does not yet handle this** and can show a user the
+state from before their own transaction — a known open issue, see PROGRESS
+Session 13.
 
 ---
 
