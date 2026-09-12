@@ -374,25 +374,51 @@ Base, never from GenLayer, so it needs **no** GenLayer address, key, or RPC —
 `NEXT_PUBLIC_ESCROW_ADDRESS` is the only required variable.
 
 `NEXT_PUBLIC_ESCROW_ADDRESS` is baked into the client bundle at build time, so
-changing it requires a redeploy. A missing value is a **build-time error**, not
-a blank page — that is deliberate.
+changing it requires a redeploy. A missing value is **not** a build failure —
+the address is resolved on first use, so the build succeeds and the browser
+shows a message naming the variable and the redeploy it needs. (Next prerenders
+every page on the server; throwing at module scope would have turned a forgotten
+environment variable into a red deployment whose error pointed at the build
+rather than at the setting.)
 
 ---
 
 ## 6. Seed the demo
 
-With the deployer or demo wallet, post two or three offers through the UI at
-`/offers/new`. Then walk one through to settlement so the home page's proof card
-has a real result to show — the card renders a real `Settled` event or nothing
-at all; it never shows a placeholder.
+**Don't do this by hand.** Run the seeder:
 
-Sequence for a settled demo:
+```bash
+cd relayer
+node scripts/seed-demo.ts               # read the chain, print the plan
+node scripts/seed-demo.ts --broadcast   # send
+```
+
+It creates one purchase in each stage — OPEN, FUNDED, DELIVERED, DISPUTED — so
+the offers list has a row a judge can click in every state without playing both
+sides of a trade first. It is **resumable**: it reads the chain and performs only
+what is missing, so re-running after a failure continues, and re-running after
+success does nothing. `--inspect` prints every purchase and re-checks that the
+escrow's `totalHeld()` matches its USDC balance.
+
+**Do not seed rubrics with `cast`.** The first version of this did, as
+`'["a, b", "c"]'`, and cast splits that on *every* comma — including commas
+inside the criteria. A rubric with one comma too many is rejected; a rubric with
+exactly one is **silently stored cut in half at the comma**, permanently, in the
+text a judgment is made against. viem takes a real `string[]` and never invents
+a delimiter, which is why the seeder is a `.ts` file. See MEMORY.md, *Never build
+contract text by joining strings*.
+
+The settled demo (purchase #1) was done by hand before the seeder existed, and
+the sequence is still the shape of the product:
 
 1. **Post** an offer as the seller.
 2. **Pay** as a different wallet (a seller cannot buy their own offer).
 3. **Mark delivered** as the seller.
 4. **Dispute** a requirement as the buyer, posting the bond.
 5. Let the relayer carry the judgment, or call `settle()` directly.
+
+The home page's proof card renders a real `Settled` event or nothing at all; it
+never shows a placeholder.
 
 ---
 
