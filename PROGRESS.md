@@ -21,12 +21,12 @@ Work log, newest first. For durable decisions and constraints see
 | Frontend (8 pages) | 🟢 **8 pages typecheck clean (`tsc --noEmit` exit 0) AND build (`next build` exit 0)** — verified locally 2026-09-11 |
 | Frontend — stale reads after a write | 🟢 **handled since Session 14** — every write names what it made true and waits for the chain to agree before the page acts on it |
 | Frontend — wallet connect (Brave / multi-wallet) | 🟡 **rewritten in Session 14** (EIP-6963 discovery, picker, deferred network switch); typechecks and builds, **but has not been exercised against a real wallet** — see Session 14 for what to check |
-| CI (GitHub Actions) | 🟢 **all 5 jobs green on GitHub's runners (57 s)** — the workflow-scope blocker was local, see Session 13 |
+| CI (GitHub Actions) | 🟢 **all 5 jobs green on GitHub's runners** — Foundry toolchain pinned to `v1.8.1` since Session 15 (it was `stable`, and one run died on a 500 fetching the tarball) |
 | End-to-end loop | 🟢 **CLOSED — a real dispute settled on Base Sepolia with real USDC; `settle()` mined, verdict carried back from studio-dev** |
 | Demo content on chain | 🟢 **6 purchases, one in every stage**, seeded 2026-09-12 and verified by reading each rubric back off the chain — but **purchase #2 carries a corrupted rubric** from the deleted shell seeder, see Session 15 |
 | README / security narrative | 🟢 README, `docs/SECURITY.md`, `docs/DEPLOY.md` all written — every cross-link resolves |
 | docs/MONEY_RAILS_AUDIT.md | 🟢 written — Issues 1–2 clean, Issue 3's gap closed by `totalHeld()`, Issue 4 still flagged unmeasured |
-| GitHub push wired up | 🟢 working (code pushes fine; only `.github/workflows/` is blocked) |
+| GitHub push wired up | 🟢 working — **including `.github/workflows/`**; the `workflow` scope is granted (re-verified 2026-09-12) |
 | GenLayer deploy (studio-dev 61997) | 🟢 **DEPLOYED — `0x0f385a4e7400a0693776D19102e0be75D334ce1c`, FINALIZED · MAJORITY_AGREE, 5/5 validators; schema loads** |
 | Base escrow deploy | 🟢 **DEPLOYED — `0x32288128Ff07Fc9e443161c1F336b784508a056A`; all seven immutables verified on-chain** |
 | Vercel deploy | 🟢 **READY — precondition met; one required env var, value known** |
@@ -205,6 +205,35 @@ row on the demo's front page. The escrow has no edit function.
 to accept a redeploy of the escrow to clear it (which would also clear #1, the
 settled purchase the loop was proven with). Flagged rather than silently
 absorbed.
+
+### CI went red on a commit that could not have caused it — and the pin that stops that
+
+The seeding commit's run failed `contracts (forge build + test)` in 8 seconds,
+before any Solidity was compiled:
+
+```
+failed to download .../v1.8.1/foundry_v1.8.1_linux_amd64.tar.gz:
+HTTP 500 Internal Server Error
+```
+
+GitHub served a 500 from its own release CDN. Nothing in the commit touched
+`contracts/`. **Re-run `--failed` → green**, all five jobs.
+
+The failure is transient, but the setup that allowed it is not: the workflow
+asked for `version: stable`, which **re-resolves the toolchain on every run**.
+So CI can start compiling with a different solc on a commit that changed
+nothing — and it re-downloads the toolchain each time, which is what 500'd.
+Five days from a submission, a red build caused by somebody else's release is
+the worst failure mode to be debugging.
+
+Pinned to **`v1.8.1`**, which is not a guess: it is the tag CI resolved today
+*and* the local `forge --version`. Pinning also caches, so the tarball is
+fetched once rather than per run.
+
+**This was only possible because the `workflow` scope is now granted.** Both
+MEMORY.md and this file's status table still claimed `.github/workflows/` could
+not be pushed — a claim Session 13 had already contradicted. Corrected in both;
+the token reports `gist, read:org, repo, workflow`.
 
 ### Still outstanding from Session 14
 

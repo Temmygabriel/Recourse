@@ -579,21 +579,15 @@ docs/        DATA_MODEL.md, SECURITY.md, DEPLOY.md
 
 - Whether a GenLayer contract deploy requires a fee on the target network (the
   migration doc says detect gaslessness from the estimate, not the name).
-- **Blocked on the user:** the GitHub token lacks the `workflow` scope, so
-  `.github/workflows/ci.yml` cannot be pushed until they run
-  `gh auth refresh -s workflow`.
-  **Re-checked 2026-09-11, session 7:** still
-  `Token scopes: 'gist', 'read:org', 'repo'`.
-  Two consequences, and they are no longer the same consequence:
-  - The **Solidity** no longer needs CI to be verified — `forge build` and
-    `forge test` run locally (112/112). What CI adds there is a second opinion
-    on a different compiler/platform, not first light.
-  - The **GenVM SDK surface still needs CI**, because `genvm-lint` is what
-    proves the contract's `Depends` header and nondeterminism API names are
-    real. Nothing local substitutes for it.
-  - `.github/workflows/ci.yml` exists **only in the working tree** — it is
-    excluded via `.git/info/exclude`, so it is not backed up in git at all. If
-    the working tree is lost before the scope is granted, that file is lost.
+- ~~**Blocked on the user:** the GitHub token lacks the `workflow` scope.~~
+  **RESOLVED — no longer true.** Re-checked 2026-09-12 (Session 15):
+  `gh auth status` reports `Token scopes: 'gist', 'read:org', 'repo', 'workflow'`,
+  so `.github/workflows/ci.yml` **can be pushed**, and it is committed and in
+  sync. The scope was granted at some point after Session 7; Session 13 had
+  already recorded the same scopes, which is what made the older claims in
+  PROGRESS.md stale. Kept struck through rather than deleted so the earlier
+  reasoning stays traceable, but **do not act on it** — there is no blocker here
+  and no `gh auth refresh` needed.
 - **Solved 2026-09-11, session 8:** `frontend/` now **is** typechecked and
   built. `npx tsc --noEmit` exit 0 and `npx next build` exit 0, nine routes,
   against the locked versions in `package-lock.json`. Run in a scratch copy at

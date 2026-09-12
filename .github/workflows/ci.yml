@@ -31,9 +31,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned, not `stable`. `stable` re-resolves the toolchain on every run,
+      # so CI could start compiling with a different solc on a commit that
+      # changed nothing — and five days out from a submission, a red build
+      # caused by somebody else's release is the worst kind of failure to
+      # debug. v1.8.1 is the version this repo was actually verified against:
+      # the local `forge --version` and the tag CI resolved on 2026-09-12.
+      # A pinned version also caches, so the tarball is fetched once rather
+      # than re-downloaded per run — one of those downloads returned HTTP 500
+      # from GitHub and failed the job.
       - uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: stable
+          version: v1.8.1
 
       - name: Versions
         run: forge --version
