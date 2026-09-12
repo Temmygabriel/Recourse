@@ -154,7 +154,7 @@ genlayer/           the judgment layer
   tests/                      pure-Python logic tests (no network)
 relayer/            Node — carries decisions from GenLayer to Base
   src/                        pure logic first, network second
-frontend/           Next.js — the seven screens
+frontend/           Next.js — eight pages
 docs/               DATA_MODEL.md, SECURITY.md, DEPLOY.md, specs/
 scripts/            key generation, hash-vector generation
 ```
@@ -173,7 +173,7 @@ Honest about what is proven and what is not.
 | Base escrow | **Deployed to Base Sepolia** at `0x32288128Ff07Fc9e443161c1F336b784508a056A`. Compiles clean; **122/122 tests pass** (`forge test`). Runtime 16,651 B — 7,925 B under the EIP-170 limit. All seven immutables verified on-chain. |
 | GenLayer judgment contract | **Deployed to studio-dev (61997)** at `0x0f385a4e7400a0693776D19102e0be75D334ce1c` — `FINALIZED` · `MAJORITY_AGREE`, 5 validators, 5 votes revealed. The schema endpoint returns all four methods. |
 | Relayer | Written; logic tested without dependencies (30 tests). **Still has not run against a live GenLayer** — this is the significant gap. |
-| Frontend | Written; typechecks (`tsc --noEmit`) and builds (`next build`, nine routes) locally against the locked dependencies. Not yet hosted. |
+| Frontend | Written; typechecks (`tsc --noEmit`) and builds (`next build`, 8 pages) locally against the locked dependencies. Not yet hosted. |
 | Deployed end-to-end demo | **Not yet exercised.** Both contracts are live, but no verdict has travelled from GenLayer to Base, and no money has moved. |
 
 **Be precise about what "deployed" does and does not mean here.** The two

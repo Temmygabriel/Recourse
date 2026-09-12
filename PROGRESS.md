@@ -3,7 +3,7 @@
 Work log, newest first. For durable decisions and constraints see
 [MEMORY.md](./MEMORY.md).
 
-**Deadline: Sept 17, 2026** (submission). Today: Sept 11, 2026.
+**Deadline: Sept 17, 2026** (submission). Today: Sept 12, 2026.
 
 ---
 
@@ -18,12 +18,11 @@ Work log, newest first. For durable decisions and constraints see
 | Judgment logic tests | 🟢 **passing locally** (11/11, re-run after the migration) |
 | Cross-language hash vectors | 🟢 done and locked from both sides |
 | Relayer | 🟢 written; **30/30 pure-logic tests passing locally**; SDK surface verified against the published package |
-| Frontend (7 screens) | 🟢 **8 routes typecheck clean (`tsc --noEmit` exit 0) AND build (`next build` exit 0)** — verified locally 2026-09-11 |
+| Frontend (8 pages) | 🟢 **8 pages typecheck clean (`tsc --noEmit` exit 0) AND build (`next build` exit 0)** — verified locally 2026-09-11 |
 | CI (GitHub Actions) | ⚠️ file written, **cannot push** — token lacks `workflow` scope |
 | README / security narrative | 🟢 README, `docs/SECURITY.md`, `docs/DEPLOY.md` all written — every cross-link resolves |
 | docs/MONEY_RAILS_AUDIT.md | 🟢 written — Issues 1–2 clean, Issue 3's gap closed by `totalHeld()`, Issue 4 still flagged unmeasured |
 | GitHub push wired up | 🟢 working (code pushes fine; only `.github/workflows/` is blocked) |
-| Vercel deploy | 🟡 **build-verified locally; not yet deployed** — see the Vercel readiness note below |
 | GenLayer deploy (studio-dev 61997) | 🟢 **DEPLOYED — `0x0f385a4e7400a0693776D19102e0be75D334ce1c`, FINALIZED · MAJORITY_AGREE, 5/5 validators; schema loads** |
 | Base escrow deploy | 🟢 **DEPLOYED — `0x32288128Ff07Fc9e443161c1F336b784508a056A`; all seven immutables verified on-chain** |
 | Vercel deploy | 🟢 **READY — precondition met; one required env var, value known** |
@@ -38,10 +37,12 @@ Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 > machine, not CI**, and CI still cannot run until the `workflow` scope is
 > granted. A local pass and a green check are not the same evidence.
 >
-> **The GenLayer SDK surface is still unverified.** The judgment contract's
-> deterministic logic has been executed (11/11), but nothing has loaded it
-> through `genvm-lint`, so its `Depends` header and nondeterminism API names
-> remain "read from the docs" rather than "confirmed by the tool".
+> **The GenLayer SDK surface is now verified by execution, not by reading.**
+> The judgment contract deployed to studio-dev and its schema endpoint returns
+> all four methods — which means the `Depends` header resolved and the v0.3.0
+> names (`gl.contract.Contract`, `gl.vm.run_nondet`, `gl.u256`, …) are the ones
+> the runner actually accepts. `genvm-lint` was still never run; deployment is
+> stronger evidence than the lint would have been, so this is closed.
 >
 > **The relayer is verified where it can be.** Everything it does that does not
 > touch a chain — the commitment hashes, the verdict parser, the coherence check
@@ -51,18 +52,97 @@ Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 >
 > **The frontend has now been compiled.** As of Session 8 both `npx tsc --noEmit`
 > and `npx next build` exit 0 against the locked dependency versions, producing
-> all nine routes. The old caveat — "Vercel will be the first compiler" — is
+> all eight pages. The old caveat — "Vercel will be the first compiler" — is
 > retired. It was run in a scratch copy outside the repo (`%TEMP%\recourse-tsc`)
 > because this machine is 8 GB and the user asked for heavy compute to stay off
 > it, but the source compiled is byte-identical to the repo's. See the Vercel
 > readiness note in Session 8 for what is still unproven.
 >
-> **The GenLayer deploy is blocked by the network, not by the contract.**
-> Session 8 diagnosed this precisely: Bradbury's RPC load-balances across nodes
-> with inconsistent mempool views, so the same transaction hash returns `null`
-> from one poll and a transaction object from the next. Two deploy attempts were
-> accepted and then never finalized. **No GenLayer contract address exists yet**,
-> which blocks the Base escrow deploy behind it.
+> **Both contracts are deployed. The loop between them is not.**
+> `RecourseJudgment` is live on studio-dev (61997) and `RecourseEscrow` on Base
+> Sepolia, and the escrow's seven immutables were read back and verified against
+> what was intended. What has **never run** is the part in the middle: the
+> relayer has not carried a judgment to `settle()`, no dispute has been opened
+> on-chain, and no money has moved. Treat the deployment as infrastructure
+> proven and the end-to-end flow as unproven.
+>
+> This replaces an earlier paragraph here that read *"the GenLayer deploy is
+> blocked by the network, not by the contract… No GenLayer contract address
+> exists yet."* **That diagnosis was wrong and cost four sessions.** The deploy
+> was blocked by two fixable things in our own code — a v0.2.x SDK surface and a
+> default fee distribution. Full retraction in Session 11 and in
+> [`genlayer-studio-dev-deploy-issues.md`](./genlayer-studio-dev-deploy-issues.md).
+
+---
+
+## 2026-09-12 — Session 12
+
+### Done
+
+- **Reconciled every published figure in the docs against what was actually
+  measured.** The submission docs had drifted from reality in six places, all
+  now corrected and pushed (`ffe6a0b`):
+
+  | Where | Said | Is |
+  |:--|:--|:--|
+  | README repo layout | 112 tests | **122** |
+  | DEPLOY §3 | 16,403 B runtime | **16,651 B** (7,925 B margin) |
+  | DEPLOY §1 | CLI `0.37.1` | **`0.40.0-rc.3`** — §2 says 0.37.1 cannot reach studio-dev at all |
+  | DEPLOY §1 | key at `~/.genlayer/keystores/default.json` | CLI keystore, active account `deployer` |
+  | DEPLOY header | "Base Sepolia and GenLayer Bradbury" | **studio-dev (61997)** |
+  | README / DEPLOY / PROGRESS | "nine routes" vs "8 routes" | **8 pages** (the 9th entry in a `next build` table is Next's `/_not-found`) |
+
+- **Removed an orphaned paragraph that still gave the retracted advice.** The
+  "blocked by the network" section had been corrected, but its closing
+  "retry later, or raise it with the GenLayer team — a preview network that
+  activates no validators is not something the submitter can fix" had survived
+  *below* the correction that disproves it. Replaced with an explicit note to
+  delete that reasoning wherever it turns up, keeping only the still-valid
+  prohibition on substituting studionet.
+
+- **Retracted the stale claims at the top of this file.** The status banner still
+  said *"The GenLayer deploy is blocked by the network… No GenLayer contract
+  address exists yet"* and *"the GenLayer SDK surface is still unverified"* —
+  both false since Session 11. Replaced with what is true, including a note that
+  the old diagnosis cost four sessions.
+
+- **Verified all three Base Sepolia wallets are funded** and the escrow
+  reconciles at rest:
+
+  | Wallet | Address | ETH | USDC |
+  |:--|:--|--:|--:|
+  | deployer / owner | `0xe5Fe9119…a7b` | 0.019977 | 20.00 |
+  | relayer | `0x49B4f09C…037` | **0.001000** | 20.00 |
+  | demo | `0x0DE10708…40D` | 0.010000 | 20.00 |
+
+  Escrow reconciliation at rest: `totalHeld()` = `0`, escrow USDC balance = `0`.
+  They agree — but **both are zero, so this proves nothing yet.** The checklist's
+  real reconciliation check has to run mid-dispute, when the escrow holds a price
+  *and* a bond at once. That is the state where a retained-value leak would show.
+
+### Notes for whoever picks this up
+
+- **The relayer has 0.001 ETH — roughly enough for a handful of `settle()`
+  calls.** Fine for one demo dispute, thin for iteration. Top it up before
+  seeding a demo you intend to repeat.
+- **The remaining unproven step is unchanged and is the whole middle of the
+  system:** no dispute has been opened on-chain, the relayer has never run
+  against live GenLayer, and no money has moved. Everything upstream and
+  downstream of that hop is verified.
+
+### Next
+
+1. **Seed the demo** — post two or three offers through the UI, walk one to a
+   dispute. This is what makes `DRY_RUN=true` meaningful.
+2. **Run the relayer in `DRY_RUN=true`** against that dispute. It signs and
+   simulates but never broadcasts, so it exercises the full pipeline including
+   the escrow's signature recovery without moving money.
+3. **Run the mid-dispute reconciliation** (`totalHeld()` vs the escrow's USDC
+   balance) — the one checklist item nothing else covers.
+4. **Deploy to Vercel** — ready now; one required env var. See §5 of DEPLOY.md.
+
+**Not done, and needing the user:** the CI workflow still cannot be pushed —
+the GitHub token lacks the `workflow` scope (`gh auth refresh -s workflow`).
 
 ---
 

@@ -360,7 +360,7 @@ npm run dev
 ### Vercel — ✅ ready to deploy as of 2026-09-11
 
 Step 3 is done, so the precondition below is now satisfied. `frontend/` builds
-clean (`next build` exit 0, nine routes) against the locked dependencies. Set in
+clean (`next build` exit 0, 8 pages) against the locked dependencies. Set in
 **Project Settings → Environment Variables**, for **Production, Preview and
 Development** alike:
 
