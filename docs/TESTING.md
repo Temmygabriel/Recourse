@@ -155,9 +155,22 @@ because this path never needed one.
 
 ### Running low on buyer money?
 
-The buyer starts with ~5 USDC. Accepting #7 costs nothing extra (the money is
-already held). Buying things does. If you run out, ask me and I will send more
-from the seller wallet or the faucet.
+The buyer starts with about **5 USDC**. Here is what the guide spends, so you
+can see it fits:
+
+| Action | Cost to the buyer |
+|:--|:--|
+| Part 3 — accept delivery on #7 | **nothing** — the money is already held |
+| Part 5 — pay for your own promise | **2.50** |
+| Part 6 — the dispute bond on it | **0.125** |
+| | **2.625 total** |
+
+So one run through fits comfortably. A second promise to try the other ending
+from Part 5 costs another 2.50 — that will not fit, so ask me and I will send
+more from the seller wallet or the faucet rather than have you ration it.
+
+Gas is separate and comes out of ETH, not USDC. The buyer has ~0.01 ETH, which
+is plenty — Base Sepolia fees are fractions of a cent.
 
 ---
 
@@ -168,8 +181,7 @@ from the seller wallet or the faucet.
 1. Click **Post a promise** in the header.
 2. Fill it in. There are five fields, and the form enforces the same limits the
    contract does:
-   - **What you will deliver** — up to 500 characters.
-   - **Price** — in USDC.
+   - **Price** — in USDC. The `$` is already there; type only the number.
    - **Delivery deadline** — when you must deliver by. Must be in the future.
    - **Review window** — how long the *buyer* gets to accept or dispute once you
      deliver. Between 1 hour and 30 days.
@@ -177,10 +189,46 @@ from the seller wallet or the faucet.
      its own box.
 3. Click **Post this promise**.
 
+### Exact values to type — copy these
+
+Don't invent your own; these are chosen so that **Part 5 and Part 6 work**, and
+so the dispute in Part 6 is one GenLayer will genuinely have to think about.
+
+| Field | What to put |
+|:--|:--|
+| **Price** | `2.50` |
+| **Deliver by** | Leave the default (a week out). Any date at least 2 days ahead works. |
+| **Review window** | Leave the default — `7 days`. |
+
+**What you will deliver** (the promise box) — paste this:
+
+```
+I will write a 900-word technical article explaining how the Base Sepolia escrow in this project holds funds and settles a dispute, and deliver it as text in the delivery notes.
+```
+
+**Requirements** — one per box, three of them:
+
+```
+The article is at least 850 words long.
+```
+
+```
+It names the escrow contract address it is describing.
+```
+
+```
+It explains what the relayer does, and states that the relayer is trusted.
+```
+
+> **Why these three.** Requirements 1 and 2 are checkable facts. Requirement 3
+> is the one Part 6 will dispute, and it is deliberately the kind of thing a
+> seller can forget — so the verdict you get will be a real reading rather than
+> a coin flip.
+
 > **The requirements are the whole product.** They are what a dispute is argued
-> against later, and they freeze the moment somebody pays. Write them as things
-> a stranger could check. "Delivered a 3-page PDF" is checkable. "Did a good
-> job" is not.
+> against later, and they freeze the moment somebody pays. A stranger has to be
+> able to check them. "Delivered a 3-page PDF" is checkable. "Did a good job" is
+> not.
 
 **What to look for:** the requirements are **separate boxes**, not one big
 textarea. That matters — see the note at the end about the comma bug, which was
@@ -188,7 +236,7 @@ mine and not the product's.
 
 ---
 
-## Part 5 — The full loop: buy it, deliver it, accept it
+## Part 5 — The full loop: buy it, deliver it
 
 Do this with the promise you just posted.
 
@@ -199,12 +247,25 @@ Do this with the promise you just posted.
    - The app approves the *exact* price, never an unlimited amount.
 2. The stage should become **Paid — awaiting delivery**.
 3. **Switch to Seller.** Open the offer and click **Submit delivery**.
-4. Write what you delivered. The screen seeds a numbered list matching your
-   requirements — write to it, one line per requirement.
-5. Confirm. The stage becomes **Delivered**.
-6. **Switch to Buyer.** Click **Accept**. The stage becomes **Settled**.
+4. Paste this into the delivery box — it is written to satisfy the first two
+   requirements and to *miss* the third, on purpose, so Part 6 has something
+   real to decide:
 
-You have now run the entire product end to end, in both roles.
+```
+Article delivered. It runs to 940 words, covering how the escrow holds the buyer's USDC and what has to happen before it is released. It names the contract it is describing: 0x32288128Ff07Fc9e443161c1F336b784508a056A.
+```
+
+5. Confirm. The stage becomes **Delivered**.
+
+### Now choose one — you cannot do both
+
+| | |
+|:--|:--|
+| **Accept** (as Buyer) | Finishes the loop. Stage → **Settled**, money moves, no AI involved. Nice and quick, but the purchase is over. |
+| **Dispute** (as Buyer) | Goes to **Part 6**. GenLayer reads the promise against that delivery and decides the split. |
+
+If you want to see both, post a **second** promise and take the other path with
+it. Accepting first and disputing after is not possible — accepting settles it.
 
 ---
 
@@ -213,27 +274,39 @@ You have now run the entire product end to end, in both roles.
 Purchase **#6** is already sitting in **In dispute** — you can look at it without
 spending anything. `/case/6` shows the promise and the evidence side by side.
 
-To run one yourself, you need a purchase in **Delivered** state. Use **#5**
-(its window closes Sept 14 — do this today) or deliver one of your own.
+To run one yourself, use the purchase you just delivered in Part 5.
 
 1. **As Buyer**, open the delivered purchase.
 2. Click **Dispute**. You will be asked **which requirement was not kept** —
    tick the specific ones. You must name at least one.
-3. Read the note about the **bond**: 5% of the price, on top of what you already
-   paid. If GenLayer agrees with you, it comes back. If it finds the delivery met
-   everything, it goes to the seller. This is what stops people disputing out of
-   spite.
-4. Confirm in your wallet — again two transactions: approve the bond, then open
+3. **Tick requirement 3 only** — *"It explains what the relayer does, and states
+   that the relayer is trusted."*
+4. Paste this as the reason:
+
+```
+Requirement 3 is not met. The delivery notes say the article covers how funds are held and released, and they name the contract, but they never explain what the relayer does or that the relayer is trusted. That was the third requirement.
+```
+
+5. Read the note about the **bond**: 5% of the price — `0.125 USDC` on a 2.50
+   price — on top of what you already paid. If GenLayer agrees with you it comes
+   back. If it finds the delivery met everything, it goes to the seller. This is
+   what stops people disputing out of spite.
+6. Confirm in your wallet — again two transactions: approve the bond, then open
    the dispute.
-5. The stage becomes **In dispute**.
-6. Open `/case/<id>`. You should see the promise, the requirements with the
-   disputed ones marked, and both sides' written evidence.
-7. A verdict takes a few minutes. Watch the row, or check `/verdict/<id>` and
+7. The stage becomes **In dispute**.
+8. Open `/case/<id>`. You should see the promise, the three requirements with
+   **requirement 3 marked**, and both sides' written evidence.
+9. A verdict takes a few minutes. Watch the row, or check `/verdict/<id>` and
    `/receipt/<id>`.
 
-**What success looks like:** the verdict names how many requirements were met,
-the money splits accordingly, and the receipt shows exactly where each part
-went — including the bond.
+**What success looks like:** the verdict should find requirements 1 and 2 met and
+requirement 3 not met, and the money should split accordingly — a partial refund
+of roughly a third, plus the bond back to you.
+
+**But the exact split is GenLayer's to decide, and that is the point.** If it
+comes back different, that is not a bug — read the one-sentence reason on
+`/verdict/<id>` and judge whether it is a fair reading of what you pasted. That
+reason is the product's actual output.
 
 ---
 
@@ -259,6 +332,10 @@ If you see any of these, stop and tell me which step you were on.
 | A stage shows a blank or `undefined` | A rendering bug worth reporting. |
 | You cannot buy an offer, with an error about the seller | You are connected as the wallet that posted it. Switch accounts. |
 | "Insufficient funds" when paying | The buyer wallet is low. Ask me. |
+| **"This site is not authorised in your wallet"** | The wallet no longer has this site connected. Open the wallet, disconnect and reconnect this site, then retry. |
+| **"You declined the request in your wallet"** | You pressed reject. Nothing was sent and nothing was charged. Just try again. |
+| **"Your wallet already has a request waiting"** | The wallet has an open popup behind the browser window. Find and finish or dismiss it. |
+| A raw message full of hex, ending in a wall of text | An RPC fault rather than anything you did. Copy it to me. |
 
 ---
 
