@@ -198,6 +198,65 @@ Green on `7bb60e0` — all five jobs, 58s, including `frontend (typecheck + next
 build)`. That build is the only thing that has ever compiled these page edits;
 the five jobs run on GitHub's runners, not here.
 
+### The user's first write failed: MetaMask 4100
+
+Reported from real use — **the first time anyone has clicked a write button in
+this app in a browser**:
+
+> *"i tried to post promise, got this error: The requested method and/or account
+> has not been authorized by the user."*
+
+That string is MetaMask's **EIP-1193 code 4100**. It is the wallet refusing to
+act for an account this site is not authorised for. **It is not a revert, not a
+contract fault, and not the app's transaction building** — `createOfferAndGetId`
+is one `eth_sendTransaction` and it never left the browser.
+
+**What could be ours, and was fixed.** The write path called `ensureChain()`
+*before* establishing authorisation. A wallet with no permission for the site
+refuses `wallet_switchEthereumChain` exactly as readily as it refuses to sign,
+and answers both with 4100 — so if the site had been disconnected, the network
+switch failed first and the user would have been told their *network* was wrong
+when the real problem was the connection. `writeEscrow` and `ensureAllowance`
+now call `ensureAuthorized(account)` first and switch second, which also gives
+the switch an authorised origin to run on.
+
+`ensureAuthorized` also closes a gap the app had no answer for: `eth_accounts`
+never prompts, so a wallet that has since been disconnected leaves React state
+holding an address that *looks* connected. When the wallet no longer lists it,
+this re-requests — the only call that can restore permission — and returns
+whatever the user picked, so the send goes from the account they actually
+authorised rather than retrying with a stale one.
+
+**What is still open.** These changes make the failure recoverable and legible;
+they do not prove they were the cause. Whether the user's wallet had really been
+disconnected, or was holding a provider/account mismatch, is unknown from here —
+this machine cannot run the frontend, so it cannot be reproduced. `describeError`
+now maps the EIP-1193 codes to the action each one needs, so the next attempt
+reports something specific instead of echoing the wallet's own developer-facing
+text. **Still unverified: any write, in a browser, by a human.**
+
+### The price field
+
+Now carries its `$` as part of the control, and strips `$`, commas and spaces on
+the way in — a visible prefix is a prefix people type anyway, and pasting
+"1,500.00" out of an invoice is the other half of that. `parseUsdc` stays strict;
+the field is the one place that knows what a person types.
+
+### The guide now hands over the values
+
+`docs/TESTING.md` no longer asks the reader to invent a promise, a price and
+three requirements — it supplies them. The requirements are picked so Part 6 has
+a real question to decide: the Part 5 delivery satisfies the first two and misses
+the third **on purpose**, and Part 6 disputes that one with an honest reason.
+Parts 5 and 6 now also say plainly that accepting and disputing are mutually
+exclusive, which the earlier text implied you could do both of.
+
+### CI, again
+
+Green on `bd9059a` — all five jobs, 57s. The write-path reorder, the new
+`ensureAuthorized`, the error mapping, the price field and the new CSS all
+compile. **Compiling is not working**, and none of this has been clicked.
+
 ---
 
 ## 2026-09-12 — Session 15
