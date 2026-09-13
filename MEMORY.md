@@ -4,13 +4,15 @@ Durable project memory. Read this first when resuming work. It records
 **decisions and constraints**, not a work log — for "what happened when", see
 [PROGRESS.md](./PROGRESS.md).
 
-Last updated: 2026-09-12 (Session 15 — the demo is seeded: **six purchases on Base
-Sepolia, one in every stage**, and the seeder that put them there is
-`relayer/scripts/seed-demo.ts`. It replaced a bash+`cast` script that silently
-corrupted a rubric — see *Never build contract text by joining strings* below,
-which is the one lesson from this session worth carrying forward. Session 14
-fixed the frontend's two browser-facing defects, **neither yet exercised against
-a real wallet**; the loop itself was closed in Session 13.)
+Last updated: 2026-09-13 (Session 16 — the design addendum's landing animation and
+count-up are in, which turned up **a live production bug**: Tailwind was silently
+dropping every `stamp-*` and `status-*` tone class from the build, so a RELEASE and
+a FULL REFUND rendered identically on the one screen the theme reserves its
+loudness for. Fixed with a safelist — see *Tailwind tree-shakes custom CSS in
+`@layer`* below. Session 15 seeded the demo: **seven purchases on Base Sepolia,
+one in every stage**. Session 14 fixed the frontend's two browser-facing defects,
+**still not exercised against a real wallet**; the loop itself closed in Session
+13.)
 
 ---
 
@@ -561,6 +563,44 @@ That is a worse artifact than one slightly-wrong sentence.
 
 ---
 
+## ⚠️ Tailwind tree-shakes custom CSS in `@layer` — so a class built by interpolation disappears
+
+**The trap.** Tailwind finds classes by scanning source text for literal
+candidates. A class assembled at runtime from a variable is invisible to that
+scan, and if it is defined inside `@layer components` it is **removed from the
+production build**. The dev server and the build agree; nothing warns; the class
+is simply absent from the emitted CSS.
+
+**This bit us, in production, on the most important element in the app.**
+`Stamp` renders `stamp-${info.tone}` and the status chips render
+`status-${info.tone}`, and **neither family appears literally anywhere in the
+source**. So `.stamp-release`, `.stamp-contested`, `.stamp-neutral`,
+`.status-pending` and `.status-release` were all being dropped. The verdict
+stamp kept its border *width* (from `.stamp`) but lost its border *colour* and
+its tint — so it looked like a stamp, just a colourless one, and **a RELEASE and
+a FULL REFUND rendered identically**. On the verdict screen, that is the whole
+product.
+
+**Verified, not assumed.** A minimal isolated Tailwind 3.4.17 build (a class
+used only via `status-${tone}`) emitted `.status{border-width:1px}` and dropped
+`.status-release` / `.status-contested` entirely; adding a `safelist` made them
+appear. `frontend/tailwind.config.ts` now safelists both families plus
+`stamp-animate`.
+
+**The generalisations worth keeping:**
+- Literally-written neighbours survive, which is what made this hard to spot.
+  `.req-met` / `.req-unmet` are built as `' req-met'` — a literal in the source —
+  so they were always fine. `.status-contested` and `.status-neutral` were
+  surviving only because `AppHeader.tsx` happens to name them literally; that is
+  an accident of one call site, not a guarantee, so they are safelisted too.
+- **`@keyframes` never goes inside a layer.** It has no class name for the
+  scanner to find, so nothing can vouch for it. `stamp-land` lives in plain CSS
+  at the end of `globals.css`.
+- When adding any class that is built from a variable, safelist it in the same
+  commit. `next build` will not tell you it is missing.
+
+---
+
 ## Repository shape
 
 ```
@@ -577,18 +617,27 @@ docs/        DATA_MODEL.md, SECURITY.md, DEPLOY.md
 
 ## Open questions / not yet decided
 
-- **A negotiable review window — raised by the user 2026-09-12/13, deliberately
-  not built.** Today the *seller* sets `reviewWindow` when posting the offer
-  (1 hour – 30 days, enforced in both the form and the contract), and the buyer's
-  only say is to pay or walk away. The user's proposal: let the buyer pick the
-  window, or let the seller accept/reject the buyer's proposed window — i.e. make
-  it a term the two parties settle rather than a term one party dictates. It is a
-  good observation and it fits the product's thesis (the terms are the object),
-  but it is not a small change: it needs a new escrow entry point (a propose/accept
-  handshake, or the buyer naming the window at `purchase`), which means redeploying
-  the escrow and touching the ABI, the relayer, the frontend and the Foundry
-  tests. **Four days from submission, against a deployed immutable contract, that
-  is the wrong trade.** Recorded so it is not lost, not scheduled.
+- **A negotiable review window — raised by the user, considered, and DECLINED.**
+  2026-09-13 the user's words were *"let leave it has it is, take it or leave it"*:
+  build it as it stands, not as proposed. Today the *seller* sets `reviewWindow`
+  when posting the offer (1 hour – 30 days, enforced in both the form and the
+  contract), and the buyer's only say is to pay or walk away. The user's
+  proposal was to let the buyer pick the window, or let the seller accept/reject
+  the buyer's proposed window — i.e. make it a term the two parties settle rather
+  than a term one party dictates. The reasoning that declined it: it needs a new
+  escrow entry point (a propose/accept handshake, or the buyer naming the window
+  at `purchase`), which means redeploying the escrow and touching the ABI, the
+  relayer, the frontend and the Foundry tests — four days from submission,
+  against a deployed immutable contract. **Do not reopen this without the user
+  asking.** Recorded because the reasoning is theirs, not a limitation we
+  discovered.
+
+- **Purchase #2 carries a corrupted rubric, and the user chose to leave it.**
+  Its first criterion is stored as two fragments because of the `cast` comma bug
+  (see *Never build contract text by joining strings*). Same 2026-09-13 decision:
+  *"take it or leave it."* It is visible on chain and cannot be corrected without
+  a fresh purchase. Cancelling is **not** the fix — a cancelled offer still
+  renders (see the note at the end of that section).
 
 - Whether a GenLayer contract deploy requires a fee on the target network (the
   migration doc says detect gaslessness from the estimate, not the name).

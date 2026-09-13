@@ -3,7 +3,7 @@
 Work log, newest first. For durable decisions and constraints see
 [MEMORY.md](./MEMORY.md).
 
-**Deadline: Sept 17, 2026** (submission). Today: Sept 12, 2026.
+**Deadline: Sept 17, 2026** (submission). Today: Sept 13, 2026.
 
 ---
 
@@ -23,7 +23,9 @@ Work log, newest first. For durable decisions and constraints see
 | Frontend — wallet connect (Brave / multi-wallet) | 🟡 **rewritten in Session 14** (EIP-6963 discovery, picker, deferred network switch); typechecks and builds, **but has not been exercised against a real wallet** — see Session 14 for what to check |
 | CI (GitHub Actions) | 🟢 **all 5 jobs green on GitHub's runners** — Foundry toolchain pinned to `v1.8.1` since Session 15 (it was `stable`, and one run died on a 500 fetching the tarball) |
 | End-to-end loop | 🟢 **CLOSED — a real dispute settled on Base Sepolia with real USDC; `settle()` mined, verdict carried back from studio-dev** |
-| Demo content on chain | 🟢 **6 purchases, one in every stage**, seeded 2026-09-12 and verified by reading each rubric back off the chain — but **purchase #2 carries a corrupted rubric** from the deleted shell seeder, see Session 15 |
+| Demo content on chain | 🟢 **7 purchases, one in every stage**, seeded 2026-09-12 and verified by reading each rubric back off the chain — but **purchase #2 carries a corrupted rubric** from the deleted shell seeder, see Session 15 |
+| Verdict presentation | 🟢 **stamp landing + count-up added Session 16** — and it turned up a live bug: Tailwind was dropping every `stamp-*` / `status-*` tone class, so a RELEASE and a FULL REFUND rendered identically. Fixed with a safelist; verified with an isolated 3.4.17 build |
+| Hand-testing guide | 🟢 **`docs/TESTING.md` written** — step-by-step, end to end, with a "what broken looks like" table and an honest section on what the system cannot prove |
 | README / security narrative | 🟢 README, `docs/SECURITY.md`, `docs/DEPLOY.md` all written — every cross-link resolves |
 | docs/MONEY_RAILS_AUDIT.md | 🟢 written — Issues 1–2 clean, Issue 3's gap closed by `totalHeld()`, Issue 4 still flagged unmeasured |
 | GitHub push wired up | 🟢 working — **including `.github/workflows/`**; the `workflow` scope is granted (re-verified 2026-09-12) |
@@ -91,6 +93,110 @@ Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 > was blocked by two fixable things in our own code — a v0.2.x SDK surface and a
 > default fee distribution. Full retraction in Session 11 and in
 > [`genlayer-studio-dev-deploy-issues.md`](./genlayer-studio-dev-deploy-issues.md).
+
+---
+
+## 2026-09-13 — Session 16
+
+Two requests: a design addendum that makes the verdict *land* rather than appear,
+and the testing guide. The guide is [`docs/TESTING.md`](./docs/TESTING.md). The
+addendum is in, and it caught a production bug that had nothing to do with
+either request.
+
+### The bug the addendum walked into: Tailwind was dropping the tone classes
+
+The addendum's §4 argues that a `RELEASE` should carry the same visual weight as
+a refund. Checking whether that was even true — whether `.stamp-release` and
+`.stamp-contested` actually differed in the built CSS — turned up that **neither
+was in the built CSS at all.**
+
+`Stamp` renders `stamp-${info.tone}` and the status chips render
+`status-${info.tone}`. Tailwind finds classes by scanning source text for
+literal candidates, and **neither family appears literally anywhere in the
+source**. So all five were being tree-shaken out of the production build:
+`.stamp-release`, `.stamp-contested`, `.stamp-neutral`, `.status-pending`,
+`.status-release`.
+
+**What that looked like on screen:** the stamp kept its border *width* (from
+`.stamp`, which survives because the literal token `stamp` appears in the
+template) but lost its border *colour* and its tint. So it still looked like a
+stamp — just a colourless one — and **a RELEASE and a FULL REFUND rendered
+identically.** On the verdict screen that is the entire product. §4's premise
+was not merely unmet; the two outcomes it wanted to distinguish were the same
+pixels.
+
+**Verified, not assumed.** An isolated Tailwind 3.4.17 build in the scratch dir
+— one class used only via `status-${tone}` — emitted `.status{border-width:1px}`
+and dropped `.status-release` / `.status-contested` entirely. Adding a
+`safelist` made both appear. The fix in `frontend/tailwind.config.ts` safelists
+both families plus `stamp-animate`.
+
+Why it hid for so long: literally-written neighbours all survive, so nothing
+looked systematically wrong. `.req-met` / `.req-unmet` are built as `' req-met'`
+— a literal in the source — and were always fine. `.status-contested` and
+`.status-neutral` were surviving **only because `AppHeader.tsx` happens to name
+them literally**; that is an accident of one call site, so they are safelisted
+too. And `@keyframes stamp-land` is deliberately in plain CSS outside the
+layers, because a keyframe has no class name for the scanner to find and so
+nothing can vouch for it inside one.
+
+This had never been visible because **the frontend has still never been opened
+in a browser with a wallet** — the same gap Session 14 left open. It is exactly
+the class of defect that only a real render catches.
+
+### The addendum, as built
+
+- **The landing.** `.stamp-animate` runs a `stamp-land` keyframe — fast in,
+  slight overshoot, settle — then is dropped. It fires **once per verdict, not
+  once per render**: the verdict and case pages poll every 20s, so an entrance
+  keyed to mounting would replay the tick forever. The resting transform the
+  keyframe settles on is `.stamp`'s own, so removing the class does not shift
+  the mark by a frame. Reduced-motion turns it off.
+- **Every outcome gets the same entrance**, per §4 — no quieter animation for a
+  clean release. The tone classes carry the difference; the motion does not.
+- **The count-up.** New `frontend/src/lib/useCountUp.ts`, wired to the verdict
+  split, the receipt's two amounts, and the home proof card. Deliberately *not*
+  on the price panel, the bond, or any list row — those are figures a reader is
+  checking, not a moment being revealed.
+- **One deviation from the addendum, flagged:** its hook docstring says the
+  result is "formatted the same way `formatUsdc` does", but the code returned a
+  raw digit string — which meant every call site had to `BigInt()` it back just
+  to hand it to the formatter. It returns **base units as a bigint** instead, so
+  `formatUsdc` does the formatting and the parse disappears. Integer arithmetic
+  end to end; no float touches a token amount.
+
+### The testing guide
+
+`docs/TESTING.md` — written for the user to run by hand, in the order that
+finds the most bugs soonest. Parts 1–3 are the ten-minute path: read the list
+without a wallet, connect one (**the Session 14 fixes, still unverified in a
+browser — this is the point of the exercise**), then accept delivery on **#7**,
+which is a clean DELIVERED purchase whose window runs to Sept 27.
+
+It also carries the two things the user asked for specifically: a table of
+**what broken looks like** (so a failure is distinguishable from a pass), and an
+honest section on what the system can and cannot prove — that GenLayer
+adjudicates the written record, not reality, and that a convincing invented
+delivery is indistinguishable from a real one.
+
+### Purchase #7
+
+Added at the user's instruction: a DELIVERED purchase with a **14-day** review
+window, so the accept-a-delivery happy path is still exercisable on the 17th.
+#5's window closes Sept 14 and would not survive to submission. `totalHeld()`
+11.6 USDC reconciles against the escrow's USDC balance.
+
+### Decisions the user made, recorded
+
+Both on 2026-09-13, both *"take it or leave it"*: **do not** build the
+negotiable review window, and **do not** try to correct purchase #2's corrupted
+rubric. Reasoning in [MEMORY.md](./MEMORY.md) under *Open questions*.
+
+### CI
+
+Green on `7bb60e0` — all five jobs, 58s, including `frontend (typecheck + next
+build)`. That build is the only thing that has ever compiled these page edits;
+the five jobs run on GitHub's runners, not here.
 
 ---
 
