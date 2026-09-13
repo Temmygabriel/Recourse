@@ -6,6 +6,13 @@
 *.pem
 *.key
 
+# --- local only: never commit ----------------------------------------------
+# The hand-testing walkthrough. It is written for whoever is running the demo
+# at this machine — it names the .secrets/ key files, the wallets to import and
+# the exact values to type — so it is working material rather than part of the
+# project. Left on disk, kept off GitHub.
+docs/TESTING.md
+
 # --- node ------------------------------------------------------------------
 node_modules/
 .pnpm-store/

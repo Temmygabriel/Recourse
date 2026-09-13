@@ -25,7 +25,7 @@ Work log, newest first. For durable decisions and constraints see
 | End-to-end loop | 🟢 **CLOSED — a real dispute settled on Base Sepolia with real USDC; `settle()` mined, verdict carried back from studio-dev** |
 | Demo content on chain | 🟢 **7 purchases, one in every stage**, seeded 2026-09-12 and verified by reading each rubric back off the chain — but **purchase #2 carries a corrupted rubric** from the deleted shell seeder, see Session 15 |
 | Verdict presentation | 🟢 **stamp landing + count-up added Session 16** — and it turned up a live bug: Tailwind was dropping every `stamp-*` / `status-*` tone class, so a RELEASE and a FULL REFUND rendered identically. Fixed with a safelist; verified with an isolated 3.4.17 build |
-| Hand-testing guide | 🟢 **`docs/TESTING.md` written** — step-by-step, end to end, with a "what broken looks like" table and an honest section on what the system cannot prove |
+| Hand-testing guide | 🟢 **`docs/TESTING.md` written — local only, gitignored, deliberately not in the repo** (it names the `.secrets/` key files and the exact values to type). Step-by-step, end to end, with a "what broken looks like" table and an honest section on what the system cannot prove |
 | README / security narrative | 🟢 README, `docs/SECURITY.md`, `docs/DEPLOY.md` all written — every cross-link resolves |
 | docs/MONEY_RAILS_AUDIT.md | 🟢 written — Issues 1–2 clean, Issue 3's gap closed by `totalHeld()`, Issue 4 still flagged unmeasured |
 | GitHub push wired up | 🟢 working — **including `.github/workflows/`**; the `workflow` scope is granted (re-verified 2026-09-12) |
@@ -99,7 +99,10 @@ Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 ## 2026-09-13 — Session 16
 
 Two requests: a design addendum that makes the verdict *land* rather than appear,
-and the testing guide. The guide is [`docs/TESTING.md`](./docs/TESTING.md). The
+and the testing guide. The guide is `docs/TESTING.md` — **local only, and
+gitignored**, on the user's instruction: it is working material for whoever runs
+the demo at this machine, not part of the project. There is no link to it here
+because there is nothing in the repo to link to. The
 addendum is in, and it caught a production bug that had nothing to do with
 either request.
 
@@ -167,7 +170,8 @@ the class of defect that only a real render catches.
 
 ### The testing guide
 
-`docs/TESTING.md` — written for the user to run by hand, in the order that
+`docs/TESTING.md` (**local only — gitignored, not in this repo**) — written for
+the user to run by hand, in the order that
 finds the most bugs soonest. Parts 1–3 are the ten-minute path: read the list
 without a wallet, connect one (**the Session 14 fixes, still unverified in a
 browser — this is the point of the exercise**), then accept delivery on **#7**,
