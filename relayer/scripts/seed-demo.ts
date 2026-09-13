@@ -432,6 +432,36 @@ const SLOTS: readonly Slot[] = [
         'real backup. Criterion 1 and 2 were met.',
     },
   },
+  {
+    // Added 2026-09-13, after the first five were already on chain. Slots #3-#6
+    // were created with a 2-day review window, which meant the only DELIVERED
+    // purchase stopped being acceptable or disputable on ~Sept 14 — three days
+    // before the submission deadline. The window is frozen at creation and the
+    // escrow has no edit function, so the only fix is a new purchase created
+    // with the longer window the constants now use.
+    //
+    // This one is deliberately a CLEAN delivery, unlike #5. #5 exists to show a
+    // delivery the buyer could reasonably dispute; this exists to show the
+    // opposite — a buyer reading the evidence and clicking Accept, which is the
+    // product's happy path and the one thing the demo could not otherwise show
+    // live on any day through mid-September.
+    id: 7,
+    target: 'DELIVERED',
+    price: 3_000_000n,
+    subject: 'logo and brand kit',
+    promise:
+      'I will design and deliver a logo and a small brand kit for your product — a primary ' +
+      'mark, a wordmark, and a colour palette — with an SVG and a PNG export of each.',
+    rubric: [
+      'The kit contains a primary mark and a wordmark, each exported as both SVG and PNG.',
+      'The colour palette lists every colour it uses as a hex value.',
+      'All of the files are delivered together in a single archive.',
+    ],
+    delivery:
+      'Delivered brand-kit.zip. It contains logo-primary.svg, logo-primary.png, wordmark.svg ' +
+      'and wordmark.png, plus palette.md listing all six colours as hex values. Every file ' +
+      'named in the requirements is in the one archive.',
+  },
 ];
 
 // ---------------------------------------------------------------------------

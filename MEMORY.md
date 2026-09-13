@@ -577,6 +577,19 @@ docs/        DATA_MODEL.md, SECURITY.md, DEPLOY.md
 
 ## Open questions / not yet decided
 
+- **A negotiable review window — raised by the user 2026-09-12/13, deliberately
+  not built.** Today the *seller* sets `reviewWindow` when posting the offer
+  (1 hour – 30 days, enforced in both the form and the contract), and the buyer's
+  only say is to pay or walk away. The user's proposal: let the buyer pick the
+  window, or let the seller accept/reject the buyer's proposed window — i.e. make
+  it a term the two parties settle rather than a term one party dictates. It is a
+  good observation and it fits the product's thesis (the terms are the object),
+  but it is not a small change: it needs a new escrow entry point (a propose/accept
+  handshake, or the buyer naming the window at `purchase`), which means redeploying
+  the escrow and touching the ABI, the relayer, the frontend and the Foundry
+  tests. **Four days from submission, against a deployed immutable contract, that
+  is the wrong trade.** Recorded so it is not lost, not scheduled.
+
 - Whether a GenLayer contract deploy requires a fee on the target network (the
   migration doc says detect gaslessness from the estimate, not the name).
 - ~~**Blocked on the user:** the GitHub token lacks the `workflow` scope.~~
