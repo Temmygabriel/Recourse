@@ -26,7 +26,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
 import { DocBody, DocCard, DocHead, Notice } from '@/components/Document';
-import { parseUsdc } from '@/lib/chain';
+import { normalizeAmountInput, parseUsdc } from '@/lib/chain';
 import { createOfferAndGetId } from '@/lib/escrow';
 import { describeError } from '@/lib/useAsync';
 import { useWallet } from '@/lib/wallet';
@@ -114,15 +114,30 @@ export default function NewOfferPage() {
                 Price
               </label>
               <div className="field-value">
-                <input
-                  id="price"
-                  className="input max-w-[12rem]"
-                  inputMode="decimal"
-                  placeholder="150.00"
-                  value={price}
-                  onChange={(e) => setPrice(e.target.value)}
-                />
-                <p className="hint mt-1">In USDC, on Base Sepolia.</p>
+                {/*
+                  The `$` is part of the control rather than something to type.
+                  A visible prefix is a prefix people type anyway, so the field
+                  strips it — along with thousands separators, which is what a
+                  pasted figure from an invoice arrives with. Neither is worth
+                  an error message; see `normalizeAmountInput`.
+                */}
+                <div className="money-field">
+                  <span className="money-symbol" aria-hidden="true">
+                    $
+                  </span>
+                  <input
+                    id="price"
+                    className="input money-input"
+                    inputMode="decimal"
+                    placeholder="150.00"
+                    value={price}
+                    onChange={(e) => setPrice(normalizeAmountInput(e.target.value))}
+                    aria-describedby="price-hint"
+                  />
+                </div>
+                <p className="hint mt-1" id="price-hint">
+                  In USDC on Base Sepolia — a dollar stablecoin, so this is the dollar figure.
+                </p>
               </div>
             </div>
 

@@ -43,6 +43,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { walletErrorCode } from './chain';
 import { pollUntil, type SettleOptions } from './settle';
 
 export interface AsyncResult<T> {
@@ -162,15 +163,45 @@ export function useAsync<T>(
  * rejected the request") sitting next to a `details` field full of RPC noise.
  * Preferring `shortMessage` is the difference between a useful banner and a
  * wall of hex.
+ *
+ * WALLET REFUSALS ARE CHECKED FIRST, because `shortMessage` is the wrong answer
+ * for every one of them. A wallet that declines reports its own text, and the
+ * text is written for the wallet's developer rather than for the person who
+ * just clicked. MetaMask's **4100** reads "The requested method and/or account
+ * has not been authorized by the user" — accurate, unactionable, and it reads
+ * like a fault in this app rather than a state the user can fix in one click.
+ * Each EIP-1193 code below is mapped to the action it actually needs.
  */
 export function describeError(e: unknown): string {
   if (typeof e === 'string') return e;
+
+  switch (walletErrorCode(e)) {
+    case 4001:
+      return 'You declined the request in your wallet. Nothing was sent.';
+    case 4100:
+      return (
+        'This site is not authorised in your wallet, so it would not sign. ' +
+        'Open the wallet, connect this site, and try again.'
+      );
+    case 4902:
+      return 'Your wallet does not have this network yet. Continue and it will be offered.';
+    case -32002:
+      return (
+        'Your wallet already has a request waiting. Open the wallet and finish or ' +
+        'dismiss that one first.'
+      );
+    default:
+      break;
+  }
+
   if (e !== null && typeof e === 'object') {
     const o = e as { shortMessage?: unknown; message?: unknown };
     if (typeof o.shortMessage === 'string' && o.shortMessage.length > 0) return o.shortMessage;
     if (typeof o.message === 'string' && o.message.length > 0) return firstLine(o.message);
   }
-  return 'Something went wrong reading from the chain.';
+  // Neutral, because this is shared by reads and writes. It used to say
+  // "reading from the chain", which was wrong the moment a write failed here.
+  return 'Something went wrong.';
 }
 
 function firstLine(s: string): string {

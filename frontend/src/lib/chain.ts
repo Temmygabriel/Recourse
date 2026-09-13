@@ -233,6 +233,93 @@ export async function currentAccount(): Promise<Address | null> {
 }
 
 /**
+ * Confirm with the wallet that `account` may actually be sent from, and return
+ * the account to use.
+ *
+ * WHY THIS EXISTS
+ *
+ * The app can hold an account the wallet will not sign for. `eth_accounts` is
+ * silent — it never prompts — so a wallet that has since been disconnected, or
+ * an account removed from it, leaves React state holding an address that looks
+ * connected and is not. Sending from it produces the wallet's own refusal
+ * rather than anything this app can interpret: MetaMask answers with code
+ * **4100**, "The requested method and/or account has not been authorized by the
+ * user", which is accurate, unactionable, and looks like a fault in the app.
+ *
+ * The same refusal comes back from `wallet_switchEthereumChain`, which is why
+ * this has to run *before* `ensureChain` rather than after it: on an origin the
+ * wallet has no permission for, the network switch fails first and the send is
+ * never reached.
+ *
+ * WHY IT CAN RETURN A DIFFERENT ACCOUNT
+ *
+ * If the wallet no longer lists the one we had, the only call that can restore
+ * permission is `eth_requestAccounts` — and it returns whatever the user picks
+ * in the wallet, which may not be what we asked for. Returning it lets the
+ * caller send from the account the user actually authorised instead of
+ * retrying with a stale one. `accountsChanged` fires alongside and updates the
+ * header, so the screen converges on the same answer.
+ *
+ * It is not a prompt in the ordinary case: a wallet that already lists the
+ * account returns here without showing the user anything.
+ */
+export async function ensureAuthorized(account: Address): Promise<Address> {
+  const provider = injected();
+  if (provider === null) {
+    throw new WalletError('No wallet found in this browser. Install MetaMask (or any EVM wallet) and reload.');
+  }
+
+  let listed: string[] = [];
+  try {
+    listed = (await provider.request({ method: 'eth_accounts' })) as string[];
+  } catch {
+    listed = [];
+  }
+
+  if (listed.some((a) => a.toLowerCase() === account.toLowerCase())) {
+    return account;
+  }
+
+  let granted: string[];
+  try {
+    granted = (await provider.request({ method: 'eth_requestAccounts' })) as string[];
+  } catch (e) {
+    const code = walletErrorCode(e);
+    if (code === 4001) {
+      throw new WalletError(
+        'The wallet asked to reconnect and the request was declined, so nothing was sent.',
+      );
+    }
+    throw new WalletError(
+      'This site is not authorised in your wallet. Open the wallet, connect this site, and try again.',
+    );
+  }
+
+  const first = granted[0];
+  if (first === undefined) {
+    throw new WalletError('The wallet returned no accounts, so there is nothing to send from.');
+  }
+  return first as Address;
+}
+
+/**
+ * The EIP-1193 `code` behind whatever was thrown.
+ *
+ * Wallets put it on the error they reject with; viem re-wraps provider errors
+ * and keeps the original one on `cause`, sometimes a level or two down. Walking
+ * the chain is what makes `4001` findable in both shapes.
+ */
+export function walletErrorCode(e: unknown): number | undefined {
+  let node: unknown = e;
+  for (let depth = 0; depth < 4 && node !== null && typeof node === 'object'; depth++) {
+    const code = (node as { code?: unknown }).code;
+    if (typeof code === 'number') return code;
+    node = (node as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+/**
  * Move the wallet to Base Sepolia, adding the chain first if it has never seen
  * it.
  *
@@ -277,6 +364,15 @@ export async function ensureChain(): Promise<void> {
       throw new WalletError(
         `This purchase settles on ${baseSepolia.name}, and the request to switch was declined. ` +
           `Switch to ${baseSepolia.name} in your wallet to continue.`,
+      );
+    }
+
+    if (code === 4100) {
+      // MetaMask's "not been authorized" — the site has no permission for this
+      // account, so it will not switch networks on its behalf either. Reported
+      // as a network fault it sends the user looking in the wrong place.
+      throw new WalletError(
+        'This site is not authorised in your wallet. Open the wallet, connect this site, and try again.',
       );
     }
 
@@ -389,4 +485,22 @@ export function parseUsdc(input: string): bigint {
   const value = parseUnits(clean, USDC_DECIMALS);
   if (value <= 0n) throw new Error('Amount must be greater than zero.');
   return value;
+}
+
+/**
+ * Strip the decoration a person naturally types into a money field, so the
+ * value the app parses is always bare digits and a single point.
+ *
+ * The price field shows a `$` prefix, and a prefix you can see is a prefix
+ * people type anyway — the same way a field labelled "(555) 000-0000" collects
+ * parentheses whether or not you put them in the mask. Pasting "1,500.00" out
+ * of an invoice is the other half of it. Both are things a user will do and
+ * neither is an error worth reporting back to them, so they are removed here
+ * rather than turned into a validation message.
+ *
+ * `parseUsdc` stays strict on purpose: this is the one place that knows what a
+ * person types, so it is the one place that should be forgiving.
+ */
+export function normalizeAmountInput(raw: string): string {
+  return raw.replace(/[$,\s]/g, '');
 }

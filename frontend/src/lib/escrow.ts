@@ -20,7 +20,14 @@
 
 import { decodeEventLog, parseAbiItem, type Address } from 'viem';
 
-import { ensureChain, ESCROW, publicClient, usdcAddress, walletClient } from './chain';
+import {
+  ensureAuthorized,
+  ensureChain,
+  ESCROW,
+  publicClient,
+  usdcAddress,
+  walletClient,
+} from './chain';
 import type { Purchase } from './abi';
 import { erc20Abi, escrowAbi } from './abi';
 
@@ -233,8 +240,10 @@ export async function ensureAllowance(
   const existing = await usdcAllowance(account);
   if (existing >= amount) return null;
 
+  // Authorisation first, then the network — see the note in `writeEscrow`.
+  const from = await ensureAuthorized(account);
   await ensureChain();
-  const wallet = walletClient(account);
+  const wallet = walletClient(from);
   return wallet.writeContract({
     address: await usdcAddress(),
     abi: erc20Abi,
@@ -264,9 +273,19 @@ export async function writeEscrow(
   //
   // It is idempotent and costs one `eth_chainId` round trip when already
   // correct, which is the common case.
+  //
+  // ORDER MATTERS: authorisation is confirmed before the network is switched,
+  // not after. A wallet that has no permission for this site refuses
+  // `wallet_switchEthereumChain` as readily as it refuses to sign — MetaMask
+  // answers both with 4100, "The requested method and/or account has not been
+  // authorized by the user" — so switching first means the failure lands on the
+  // network call and the user is told their network is wrong when the real
+  // problem is that the site was disconnected. Confirming first also gives the
+  // switch an authorised origin to run on.
+  const from = await ensureAuthorized(account);
   await ensureChain();
 
-  const wallet = walletClient(account);
+  const wallet = walletClient(from);
   // viem's per-function argument inference narrows `args` to the union of all
   // eight signatures, which it cannot check against a dynamic name. The ABI is
   // the source of truth and every call site is typed at the call, so this is the

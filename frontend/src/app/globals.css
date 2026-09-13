@@ -449,6 +449,25 @@
            text-[14px] text-ink placeholder:text-ink-muted/60;
   }
 
+  /*
+   * A money field. The `$` sits inside the control rather than beside it, so
+   * the prefix is unambiguous about which figure it belongs to and the user
+   * never has to type it. The input keeps its own padding on the left so the
+   * symbol and a long figure never touch.
+   */
+  .money-field {
+    @apply relative block max-w-[12rem];
+  }
+
+  .money-symbol {
+    @apply pointer-events-none absolute left-3 top-1/2 -translate-y-1/2
+           text-[14px] text-ink-muted;
+  }
+
+  .money-input {
+    @apply pl-7;
+  }
+
   .textarea {
     @apply resize-y leading-relaxed;
   }
