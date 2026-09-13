@@ -10,7 +10,7 @@
  * (a countdown, a copy-to-clipboard) that markup alone cannot.
  */
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { EXPLORER_URL } from '@/lib/chain';
 import { outcomeInfo } from '@/lib/status';
@@ -110,12 +110,39 @@ function truncateHash(h: string): string {
 /**
  * The stamped disposition. One per screen, on the settlement screen, and it is
  * the only loud element in the app — see the note on `.stamp` in globals.css.
+ *
+ * The mark lands rather than appears: `.stamp-animate` runs the stamp-land
+ * keyframe (fast in, slight overshoot, settle) and is then dropped. A smooth
+ * fade would read as a UI transition, and this is meant to read as impact.
+ *
+ * It fires once per *verdict*, not once per render. The verdict and case pages
+ * poll every 20s, so an entrance keyed to mounting alone would replay the
+ * landing on every tick — the mark would twitch forever. Holding the last
+ * outcome in a ref means only a genuinely new value re-triggers it.
+ *
+ * §4 of the landing addendum, and the reason there is no second animation
+ * below: every outcome gets this same entrance. A RELEASE is the product's
+ * best case and must land with as much presence as a refund — the tone classes
+ * carry the difference, the motion does not.
  */
 export function Stamp({ outcome, size = 'md' }: { outcome: number; size?: 'md' | 'lg' }) {
   const info = outcomeInfo(outcome);
+  const [animate, setAnimate] = useState(false);
+  const seen = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (seen.current === outcome) return;
+    seen.current = outcome;
+    setAnimate(true);
+    // Slightly longer than the 0.55s keyframe, so the class is still applied
+    // when the animation finishes and `both` can do its job.
+    const t = setTimeout(() => setAnimate(false), 600);
+    return () => clearTimeout(t);
+  }, [outcome]);
+
   return (
     <span
-      className={`stamp stamp-${info.tone}`}
+      className={`stamp stamp-${info.tone}${animate ? ' stamp-animate' : ''}`}
       style={size === 'lg' ? { fontSize: '1.35rem', paddingLeft: '1.75rem', paddingRight: '1.75rem' } : undefined}
       role="img"
       aria-label={info.label}

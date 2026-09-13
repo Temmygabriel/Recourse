@@ -510,6 +510,20 @@
     background: rgba(91, 91, 99, 0.05);
   }
 
+  /*
+   * The landing. A stamp that fades in reads as a UI transition; a stamp that
+   * arrives fast and settles reads as impact, which is the one moment this
+   * restrained theme is allowed to have. Applied briefly by `Stamp`, then
+   * removed — see the note there.
+   *
+   * The rest state the keyframe settles on (scale 1, rotate -1.5deg) is
+   * exactly `.stamp`'s own transform, so removing the class at the end of the
+   * animation does not shift the mark by a frame.
+   */
+  .stamp-animate {
+    animation: stamp-land 0.55s cubic-bezier(0.2, 1.6, 0.4, 1) both;
+  }
+
   /* --- Money ------------------------------------------------------------- */
 
   /*
@@ -566,5 +580,41 @@
     overflow: hidden;
     clip: rect(0 0 0 0);
     white-space: nowrap;
+  }
+}
+
+/*
+ * The stamp's landing, kept outside `@layer components` on purpose.
+ *
+ * Tailwind tree-shakes custom CSS in a layer against the class names it can
+ * find in the source, and `@keyframes` has no class name to find — so a
+ * keyframe written inside the layer is a rule nothing can vouch for. Outside
+ * the layers this is plain CSS and is emitted verbatim, which is what a named
+ * animation needs. (`.stamp-animate` above is in the layer because it *is* a
+ * class, and it is named in tailwind.config.ts's safelist.)
+ *
+ * See the landing-animation addendum to
+ * recourse_design_direction_security_paper.md, §2.
+ */
+@keyframes stamp-land {
+  0% {
+    transform: scale(0.25) rotate(-18deg);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.08) rotate(-1deg);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1) rotate(-1.5deg);
+    opacity: 1;
+  }
+}
+
+/* A stamp that lands is decoration. For anyone who has asked the system not to
+   animate things, the mark should simply be there. */
+@media (prefers-reduced-motion: reduce) {
+  .stamp-animate {
+    animation: none;
   }
 }

@@ -42,6 +42,7 @@ import { formatUsdc } from '@/lib/chain';
 import { fetchPurchase, fetchSettlement } from '@/lib/escrow';
 import { WHO_DECIDED_NOTE, refundDescription, verdictLine } from '@/lib/status';
 import { useAsync } from '@/lib/useAsync';
+import { useCountUpUsdc } from '@/lib/useCountUp';
 
 export default function VerdictPage() {
   const params = useParams<{ id: string }>();
@@ -54,6 +55,12 @@ export default function VerdictPage() {
   }, [id]);
 
   const { data, error, loading } = useAsync(read, [id], { pollMs: 20_000 });
+
+  // Declared above the early returns, as hooks must be. Both stay at zero
+  // until the settlement lands, so the count runs once on the real figures —
+  // and the 20s poll returns the same settlement, which must not restart it.
+  const sellerAmount = useCountUpUsdc(data?.settlement?.sellerAmount ?? 0n);
+  const buyerAmount = useCountUpUsdc(data?.settlement?.buyerAmount ?? 0n);
 
   if (loading && data === null) {
     return (
@@ -137,11 +144,11 @@ export default function VerdictPage() {
         <div className="mt-6 border-t border-rule pt-4">
           <div className="money-row">
             <span className="text-[14px] text-ink-muted">Seller receives</span>
-            <span className="amount">{formatUsdc(settlement.sellerAmount)}</span>
+            <span className="amount">{formatUsdc(sellerAmount)}</span>
           </div>
           <div className="money-row">
             <span className="text-[14px] text-ink-muted">Buyer receives</span>
-            <span className="amount">{formatUsdc(settlement.buyerAmount)}</span>
+            <span className="amount">{formatUsdc(buyerAmount)}</span>
           </div>
           {(settlement.bondToBuyer > 0n || settlement.bondToSeller > 0n) && (
             <div className="money-row border-t border-rule pt-3">

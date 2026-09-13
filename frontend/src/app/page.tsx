@@ -29,6 +29,7 @@ import { Empty, Loading, Notice, Stamp } from '@/components/Document';
 import { CardIcon, PackageIcon, ShieldCheckIcon } from '@/components/Icon';
 import { fetchAllPurchases, fetchSettlement, fetchSettledOutcomes } from '@/lib/escrow';
 import { formatUsdc } from '@/lib/chain';
+import { useCountUpUsdc } from '@/lib/useCountUp';
 import { STAGE } from '@/lib/abi';
 import { useAsync } from '@/lib/useAsync';
 
@@ -56,6 +57,12 @@ export default function HomePage() {
   );
 
   const settlement = proof.data;
+
+  // Counted, because on this card the two figures are the whole claim being
+  // made. Zero until the settlement resolves, so the count runs on the real
+  // value rather than on a placeholder. See useCountUpUsdc.
+  const proofBuyer = useCountUpUsdc(settlement?.buyerAmount ?? 0n);
+  const proofSeller = useCountUpUsdc(settlement?.sellerAmount ?? 0n);
 
   return (
     <div className="sheet">
@@ -114,8 +121,8 @@ export default function HomePage() {
               <p className="text-[12px] text-ink-muted">
                 Purchase <span className="font-mono">#{proofId}</span> settled on Base — buyer
                 received{' '}
-                <span className="proof-figure">{formatUsdc(settlement.buyerAmount)}</span>, seller
-                received <span className="proof-figure">{formatUsdc(settlement.sellerAmount)}</span>
+                <span className="proof-figure">{formatUsdc(proofBuyer)}</span>, seller
+                received <span className="proof-figure">{formatUsdc(proofSeller)}</span>
                 .
               </p>
             </div>

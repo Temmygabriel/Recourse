@@ -13,6 +13,41 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ['./src/**/*.{ts,tsx}'],
+
+  /*
+   * The tone-interpolated classes, kept unconditionally.
+   *
+   * Tailwind finds classes by scanning source text for literal candidates, so a
+   * class built by interpolation is invisible to it. `Stamp` renders
+   * `stamp-${info.tone}` and the status chips render `status-${info.tone}` —
+   * neither family appears literally anywhere, so `@layer components` dropped
+   * them from the production build (verified against 3.4.17: the classes are
+   * simply absent from the emitted CSS, while literally-written neighbours like
+   * `.req-met` survive).
+   *
+   * The damage was quiet, which is what made it worth fixing rather than
+   * noting: the verdict stamp is the one loud element in the app, and without
+   * these rules a RELEASE and a FULL REFUND render identically — no border ink,
+   * no tint. `.stamp` alone still draws a border, so it looked like a stamp,
+   * just a colourless one.
+   *
+   * `.status-contested` and `.status-neutral` survive today only because
+   * AppHeader.tsx happens to name them literally; they are listed anyway, since
+   * that is an accident of one call site rather than a guarantee.
+   */
+  safelist: [
+    'status-neutral',
+    'status-pending',
+    'status-release',
+    'status-contested',
+    'stamp-neutral',
+    'stamp-release',
+    'stamp-contested',
+    // Applied conditionally in `Stamp`, so the literal only appears as part of
+    // a template expression. Held here for the same reason as the rest.
+    'stamp-animate',
+  ],
+
   theme: {
     extend: {
       colors: {

@@ -34,6 +34,7 @@ import { ESCROW, formatUsdc } from '@/lib/chain';
 import { fetchPurchase, fetchSettlement } from '@/lib/escrow';
 import { outcomeInfo, refundDescription } from '@/lib/status';
 import { useAsync } from '@/lib/useAsync';
+import { useCountUpUsdc } from '@/lib/useCountUp';
 
 export default function ReceiptPage() {
   const params = useParams<{ id: string }>();
@@ -46,6 +47,12 @@ export default function ReceiptPage() {
   }, [id]);
 
   const { data, error, loading } = useAsync(read, [id]);
+
+  // The two figures this receipt exists to state. The price and the total above
+  // them are reference facts a reader is checking against each other, so they
+  // stay static — see useCountUpUsdc.
+  const sellerAmount = useCountUpUsdc(data?.settlement?.sellerAmount ?? 0n);
+  const buyerAmount = useCountUpUsdc(data?.settlement?.buyerAmount ?? 0n);
 
   if (loading && data === null) {
     return (
@@ -119,11 +126,11 @@ export default function ReceiptPage() {
           <div className="mt-6 border-t border-rule pt-4">
             <div className="money-row">
               <span className="text-[15px]">Seller received</span>
-              <span className="amount">{formatUsdc(settlement.sellerAmount)}</span>
+              <span className="amount">{formatUsdc(sellerAmount)}</span>
             </div>
             <div className="money-row border-b border-rule pb-3">
               <span className="text-[15px]">Buyer received back</span>
-              <span className="amount">{formatUsdc(settlement.buyerAmount)}</span>
+              <span className="amount">{formatUsdc(buyerAmount)}</span>
             </div>
             <div className="money-row pt-3">
               <span className="text-[13px] text-ink-muted">Total moved</span>
