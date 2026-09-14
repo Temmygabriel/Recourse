@@ -83,6 +83,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -110,6 +111,60 @@ const transport = http(RPC, { retryCount: 3, timeout: 30_000 });
 const publicClient = createPublicClient({ chain: baseSepolia, transport });
 
 // ---------------------------------------------------------------------------
+// Evidence pins — see docs/evidence/README.md.
+//
+// The URL and digest each delivered purchase commits to. Read from one file so
+// the seed script, the e2e driver and the frontend cannot disagree about which
+// commit serves which artifact: a divergence there is not caught by anything at
+// run time, and it reaches the seller as a full refund for a delivery they
+// actually made.
+// ---------------------------------------------------------------------------
+
+interface Pin {
+  readonly url: string;
+  readonly sha256: string;
+}
+
+const PINS = JSON.parse(
+  readFileSync(resolve(HERE, '../../docs/evidence/pins.json'), 'utf8'),
+) as { readonly artifacts: Record<string, Pin> };
+
+/**
+ * The digest of exactly what the URL serves — fetched, not read from disk.
+ *
+ * `redirect: 'error'` because `fetch` follows redirects by default, and a
+ * redirect would mean the bytes came from somewhere other than the URL being
+ * committed to. Raw GitHub serves content directly; a redirect here is a signal
+ * that the pin is wrong, not a normal hop.
+ */
+async function pinArtifact(key: string): Promise<Hex> {
+  const pin = PINS.artifacts[key];
+  if (pin === undefined) {
+    throw new Error(
+      `docs/evidence/pins.json has no artifact "${key}". Add it and push before seeding — ` +
+        `a purchase cannot be delivered without a URL and a digest.`,
+    );
+  }
+  const res = await fetch(pin.url, { redirect: 'error' });
+  if (!res.ok) {
+    throw new Error(
+      `evidence fetch got HTTP ${res.status} for ${pin.url}. A 404 here usually means the ` +
+        `pinned commit is not the one that added the file.`,
+    );
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  const digest = `0x${createHash('sha256').update(buf).digest('hex')}` as Hex;
+  if (digest.toLowerCase() !== `0x${pin.sha256}`.toLowerCase()) {
+    throw new Error(
+      `the bytes at ${pin.url} hash to ${digest} but pins.json says ${pin.sha256}. The ` +
+        `artifact was edited after it was pinned. Do not deliver it — the judgment ` +
+        `contract would score this as a tampered artifact and refund in full.`,
+    );
+  }
+  return digest;
+}
+
+// ---------------------------------------------------------------------------
 // ABIs. The write surface is declared here rather than widened into the
 // relayer's own ABI (src/abi.ts), which is deliberately read-only plus `settle`
 // because that is all a relayer does.
@@ -118,12 +173,12 @@ const publicClient = createPublicClient({ chain: baseSepolia, transport });
 const escrowAbi = parseAbi([
   'function createOffer(uint96 price, uint64 deliveryDeadline, uint64 reviewWindow, string promiseText, string[] rubric) returns (uint256)',
   'function purchase(uint256 purchaseId)',
-  'function submitDelivery(uint256 purchaseId, string deliveryNotes)',
+  'function submitDelivery(uint256 purchaseId, string deliveryUrl, bytes32 artifactHash, string deliveryNotes)',
   'function openDispute(uint256 purchaseId, uint8 disputedBitmap, string disputeNotes)',
   'function disputeBond(uint96 price) view returns (uint96)',
   'function purchaseCount() view returns (uint256)',
   'function totalHeld() view returns (uint256)',
-  'function getPurchase(uint256 purchaseId) view returns ((address seller, address buyer, uint96 price, uint64 deliveryDeadline, uint64 reviewWindow, uint64 deliveredAt, uint8 criteriaCount, uint8 stage, uint96 disputeBond, uint8 disputedBitmap, string promiseText, string[] rubric, string deliveryNotes, string disputeNotes))',
+  'function getPurchase(uint256 purchaseId) view returns ((address seller, address buyer, uint96 price, uint64 deliveryDeadline, uint64 reviewWindow, uint64 deliveredAt, uint8 criteriaCount, uint8 stage, uint96 disputeBond, uint8 disputedBitmap, string promiseText, string[] rubric, string deliveryNotes, string deliveryUrl, bytes32 artifactHash, string disputeNotes))',
 ]);
 
 const erc20Abi = parseAbi([
@@ -351,6 +406,17 @@ interface Slot {
   readonly promise: string;
   readonly rubric: readonly string[];
   readonly delivery?: string;
+  /**
+   * Key into `docs/evidence/pins.json` — the artifact at the commit-pinned URL
+   * the delivery points at.
+   *
+   * Required whenever `delivery` is set. The escrow will not accept a delivery
+   * without a URL and a digest, and it should not: the seller's notes are their
+   * account of the work, while the artifact is the work. A delivery the court
+   * can only read a description of is a delivery anyone can fake with good
+   * prose.
+   */
+  readonly evidence?: string;
   readonly dispute?: { readonly bitmap: number; readonly notes: string };
 }
 
@@ -404,6 +470,7 @@ const SLOTS: readonly Slot[] = [
       'Delivered accessibility-report.md. Twelve failures listed, each with the element and ' +
       'the WCAG criterion. Two of the twelve name the component rather than the element, and ' +
       'the report does not say which file the component lives in.',
+    evidence: 'accessibility_report',
   },
   {
     id: 6,
@@ -421,6 +488,7 @@ const SLOTS: readonly Slot[] = [
     delivery:
       'Delivered backup-setup.md and the cron entry. The nightly job has run twice; the ' +
       'retention script is in place. Restore instructions are written up in full.',
+    evidence: 'backup_setup',
     // Bitmap 4 = 0b100 = bit index 2 = the third criterion, counting from zero.
     // The indices are the seller's own frozen rubric, which is the point of the
     // bitmap: the buyer names a criterion that existed before the delivery did.
@@ -453,14 +521,14 @@ const SLOTS: readonly Slot[] = [
       'I will design and deliver a logo and a small brand kit for your product — a primary ' +
       'mark, a wordmark, and a colour palette — with an SVG and a PNG export of each.',
     rubric: [
-      'The kit contains a primary mark and a wordmark, each exported as both SVG and PNG.',
+      'The kit contains both a primary mark and a wordmark, and the SVG source of each is included in the document.',
       'The colour palette lists every colour it uses as a hex value.',
-      'All of the files are delivered together in a single archive.',
+      'The whole kit is delivered as a single document.',
     ],
     delivery:
-      'Delivered brand-kit.zip. It contains logo-primary.svg, logo-primary.png, wordmark.svg ' +
-      'and wordmark.png, plus palette.md listing all six colours as hex values. Every file ' +
-      'named in the requirements is in the one archive.',
+      'Delivered brand-kit.md — one document holding both marks as inline SVG source, the ' +
+      'full palette with hex values, and the manifest of PNG exports.',
+    evidence: 'brand_kit',
   },
 ];
 
@@ -638,9 +706,24 @@ async function driveTo(
       if (slot.delivery === undefined) {
         throw new Error(`#${slot.id} must reach DELIVERED but the plan has no delivery text.`);
       }
-      console.log(`  + #${slot.id} submitDelivery`);
+      if (slot.evidence === undefined) {
+        throw new Error(
+          `#${slot.id} must reach DELIVERED but the plan names no evidence artifact. The ` +
+            `escrow requires a URL and a digest at submitDelivery(), and a purchase ` +
+            `delivered without evidence could only ever be judged on the seller's prose.`,
+        );
+      }
+      // Fetched before anything is broadcast, so a dead URL or a stale pin fails
+      // here — with no gas spent and no purchase left half-delivered.
+      const digest = await pinArtifact(slot.evidence);
+      console.log(`  + #${slot.id} submitDelivery — ${PINS.artifacts[slot.evidence]!.url}`);
       if (broadcast) {
-        await send(seller, ESCROW, escrowAbi, 'submitDelivery', [id, slot.delivery]);
+        await send(seller, ESCROW, escrowAbi, 'submitDelivery', [
+          id,
+          PINS.artifacts[slot.evidence]!.url,
+          digest,
+          slot.delivery,
+        ]);
         await waitForStage(id, 'DELIVERED');
       }
     }

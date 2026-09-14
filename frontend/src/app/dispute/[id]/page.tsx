@@ -28,6 +28,7 @@ import {
   Notice,
   Verbatim,
 } from '@/components/Document';
+import { ArtifactRef } from '@/components/ArtifactRef';
 import { RequirementList, selectionToBitmap } from '@/components/RequirementList';
 import { STAGE } from '@/lib/abi';
 import { formatUsdc } from '@/lib/chain';
@@ -219,6 +220,19 @@ export default function DisputePage() {
             <DocHead title="What was promised" />
             <DocBody>
               <Verbatim text={p.promiseText} />
+
+              {/*
+                The file the buyer is about to dispute, on the page where they
+                dispute it. A buyer who has to open another tab to re-read the
+                delivery is a buyer ticking requirements from memory, and the
+                ticks they choose are the ones the court is asked to rule on.
+              */}
+              {p.deliveryUrl !== '' && (
+                <div className="mt-4">
+                  <ArtifactRef url={p.deliveryUrl} hash={p.artifactHash} />
+                </div>
+              )}
+
               <p className="mt-3 text-[13px] text-ink-muted">
                 The seller&rsquo;s delivery notes are on{' '}
                 <Link href={`/offers/${id}`}>the purchase page</Link>.

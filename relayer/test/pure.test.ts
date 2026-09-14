@@ -33,7 +33,7 @@ import {
 } from '../src/decision.ts';
 import { criteriaBitmap, bitmapToIndices, decisionDigestHex, evidenceRootHex, rubricHashHex, sha256Hex } from '../src/hashes.ts';
 import { resolveChain } from '../src/genlayer.ts';
-import { buildPackage, serializePackage, PackageError } from '../src/package.ts';
+import { buildPackage, serializePackage, validateEvidenceUrl, PackageError } from '../src/package.ts';
 import { Store } from '../src/store.ts';
 import { keccak256 } from './stubs/viem.ts';
 import * as chains from './stubs/genlayer-chains.ts';
@@ -137,17 +137,45 @@ test('rubric order is load-bearing', () => {
 // evidenceRoot
 // ---------------------------------------------------------------------------
 
-test('evidenceRoot is keccak256 over the two 32-byte hashes in order', () => {
-  const a = sha256Hex('delivery notes');
-  const b = sha256Hex('dispute notes');
-  const root = evidenceRootHex(a, b);
+test('evidenceRoot is keccak256 over the three 32-byte hashes in order', () => {
+  const delivery = sha256Hex('delivery notes');
+  const dispute = sha256Hex('dispute notes');
+  const artifact = sha256Hex('artifact bytes');
+  const root = evidenceRootHex(delivery, dispute, artifact);
 
   assert.match(root, /^0x[0-9a-f]{64}$/);
-  // Order matters: swapping the two must change the root, otherwise a relayer
-  // could present the buyer's notes as the seller's.
-  assert.notEqual(root, evidenceRootHex(b, a));
-  // And it must be a real keccak over 64 bytes, not over the concatenated text.
-  assert.equal(root, keccak256(`0x${a.slice(2)}${b.slice(2)}`));
+  // Every position is load-bearing: moving any field to a different slot must
+  // change the root, or a relayer could present one commitment as another.
+  assert.notEqual(root, evidenceRootHex(dispute, delivery, artifact));
+  assert.notEqual(root, evidenceRootHex(delivery, artifact, dispute));
+  assert.notEqual(root, evidenceRootHex(artifact, dispute, delivery));
+  // Three static bytes32 values encode as their plain 96-byte concatenation,
+  // which is what `abi.encode` produces and what Solidity's `evidenceRoot()`
+  // hashes. If this ever stops holding, the relayer and the escrow have parted
+  // ways and every settle() would revert with "evidence mismatch".
+  assert.equal(root, keccak256(`0x${delivery.slice(2)}${dispute.slice(2)}${artifact.slice(2)}`));
+});
+
+test('evidenceRoot is not the old two-field root', () => {
+  // The regression guard for the change that made this function three-field.
+  // `concatHex([deliveryHash, disputeHash])` was valid while the root covered
+  // two commitments; it is a *silently different value* now, not a type error,
+  // so nothing but an explicit assertion catches it coming back.
+  const delivery = sha256Hex('delivery notes');
+  const dispute = sha256Hex('dispute notes');
+  const artifact = sha256Hex('artifact bytes');
+
+  assert.notEqual(
+    evidenceRootHex(delivery, dispute, artifact),
+    keccak256(`0x${delivery.slice(2)}${dispute.slice(2)}`),
+  );
+  // And the artifact is bound, not ignored: same two text hashes, different
+  // artifact, different root. Without this the whole delivery-fetch is
+  // decorative — a verdict would travel with any artifact at all.
+  assert.notEqual(
+    evidenceRootHex(delivery, dispute, artifact),
+    evidenceRootHex(delivery, dispute, sha256Hex('different bytes')),
+  );
 });
 
 test('decisionDigest is over the exact verdict bytes', () => {
@@ -319,7 +347,7 @@ test('buildDecision assembles a release end to end', () => {
     sourceContract: `0x${'cd'.repeat(20)}`,
     promiseHash: sha256Hex('promise'),
     rubricHash: rubricHashHex(['a', 'b', 'c']),
-    evidenceRoot: evidenceRootHex(sha256Hex('d'), sha256Hex('x')),
+    evidenceRoot: evidenceRootHex(sha256Hex('d'), sha256Hex('x'), sha256Hex('a')),
     decisionDigest: decisionDigestHex(parsed.canonicalJson),
     verdict: parsed.verdict,
     criteriaCount: 3,
@@ -347,7 +375,7 @@ test('buildDecision refuses a verdict the escrow would reject', () => {
         sourceContract: `0x${'cd'.repeat(20)}`,
         promiseHash: sha256Hex('p'),
         rubricHash: rubricHashHex(['a', 'b']),
-        evidenceRoot: evidenceRootHex(sha256Hex('d'), sha256Hex('x')),
+        evidenceRoot: evidenceRootHex(sha256Hex('d'), sha256Hex('x'), sha256Hex('a')),
         decisionDigest: decisionDigestHex('{}'),
         verdict: { outcome: OUTCOME.RELEASE, refundBps: 500, criteriaMet: [true, true], reason: '' },
         criteriaCount: 2,
@@ -360,6 +388,16 @@ test('buildDecision refuses a verdict the escrow would reject', () => {
 // ---------------------------------------------------------------------------
 // The evidence package
 // ---------------------------------------------------------------------------
+
+/**
+ * A commit-pinned raw URL — the only shape the escrow, the judgment contract,
+ * and `validateEvidenceUrl` all accept. The commit is a real 40-character
+ * lowercase SHA and the path is non-empty, because every one of those three
+ * properties is separately enforced and separately tested below.
+ */
+const GOOD_URL =
+  'https://raw.githubusercontent.com/Temmygabriel/recourse-evidence/' +
+  '8f3c1d90a4b27e56cf0d1a3b8e47f2069cd51a3e/illustrations/delivery.md';
 
 function fakePurchase(overrides: Record<string, unknown> = {}) {
   return {
@@ -376,6 +414,8 @@ function fakePurchase(overrides: Record<string, unknown> = {}) {
     promiseText: 'Deliver three illustrations.',
     rubric: ['Three illustrations at 3000px', 'Mobile versions', 'Layered source files'],
     deliveryNotes: 'Delivered three illustrations at 1500px.',
+    deliveryUrl: GOOD_URL,
+    artifactHash: sha256Hex('the bytes the server serves'),
     disputeNotes: 'Resolution is half of what was promised.',
     ...overrides,
   } as Parameters<typeof buildPackage>[0];
@@ -441,6 +481,138 @@ test('buildPackage refuses a purchase with nothing to adjudicate', () => {
   assert.throws(() => buildPackage(fakePurchase({ criteriaCount: 5 }), {
     promiseHash: '0x', rubricHash: '0x', deliveryHash: '0x', disputeHash: '0x', evidenceRoot: '0x',
   }), /2-4/);
+});
+
+test('buildPackage carries the URL and the artifact hash to the judgment layer', () => {
+  const p = fakePurchase();
+  const pkg = buildPackage(p, {
+    promiseHash: sha256Hex(p.promiseText),
+    rubricHash: rubricHashHex(p.rubric),
+    deliveryHash: sha256Hex(p.deliveryNotes),
+    disputeHash: sha256Hex(p.disputeNotes),
+    evidenceRoot: '0x' as const,
+  });
+
+  // Verbatim: the judgment contract re-validates this string and fetches it, so
+  // any rewriting here would move the fetch to a different resource.
+  assert.equal(pkg.delivery_url, p.deliveryUrl);
+  // Bare lowercase hex, matching `_norm_hash` on the Python side. The 0x
+  // prefix is stripped for the same reason the text hashes are: the contract
+  // normalises it away, so sending it is noise.
+  assert.equal(pkg.artifact_hash, p.artifactHash.slice(2));
+  assert.match(pkg.artifact_hash, /^[0-9a-f]{64}$/);
+});
+
+test('buildPackage refuses a zero or malformed artifact hash', () => {
+  const commitments = {
+    promiseHash: '0x' as const, rubricHash: '0x' as const, deliveryHash: '0x' as const,
+    disputeHash: '0x' as const, evidenceRoot: '0x' as const,
+  };
+  // `submitDelivery` requires a non-zero bytes32, so a zero here means the ABI
+  // is decoding the wrong slot — worth failing on rather than shipping to
+  // GenLayer, where it would be a full refund for the seller's honest work.
+  assert.throws(
+    () => buildPackage(fakePurchase({ artifactHash: `0x${'00'.repeat(32)}` }), commitments),
+    /zero artifactHash/,
+  );
+  assert.throws(
+    () => buildPackage(fakePurchase({ artifactHash: '0xdeadbeef' }), commitments),
+    /not a sha256/,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// The evidence URL policy
+//
+// Three implementations of this rule exist — Solidity, Python, and this one —
+// and all three are exercised here against the same cases. `buildPackage`
+// refuses anything the escrow would have refused at submitDelivery, so a
+// mismatch between the copies surfaces as a failing test rather than as a
+// purchase nobody can settle.
+// ---------------------------------------------------------------------------
+
+test('the URL policy accepts a commit-pinned raw GitHub URL', () => {
+  assert.doesNotThrow(() => validateEvidenceUrl(GOOD_URL));
+  // A deeper path is fine; only the first four segments are constrained.
+  assert.doesNotThrow(() =>
+    validateEvidenceUrl(GOOD_URL.replace('/illustrations/delivery.md', '/a/b/c/d.txt')),
+  );
+});
+
+test('the URL policy refuses mutable refs, because a branch can be repointed', () => {
+  const withRef = (ref: string) => GOOD_URL.replace('8f3c1d90a4b27e56cf0d1a3b8e47f2069cd51a3e', ref);
+  // The whole point of pinning: `main` names whatever the repo owner says it
+  // names today, so a seller could deliver, wait for the buyer to read it, and
+  // then rewrite the artifact the verdict will be made about.
+  for (const ref of ['main', 'HEAD', 'master', 'v1.0.0', 'latest']) {
+    assert.throws(() => validateEvidenceUrl(withRef(ref)), /40 lowercase hex/, `ref=${ref}`);
+  }
+});
+
+test('the URL policy refuses an abbreviated or wrongly-cased commit', () => {
+  // An 8-character prefix names the same commit to a human and to `git`, but it
+  // is not the immutable identity the digest needs — GitHub could, in
+  // principle, resolve it to a different object later.
+  assert.throws(
+    () => validateEvidenceUrl(GOOD_URL.replace('8f3c1d90a4b27e56cf0d1a3b8e47f2069cd51a3e', '8f3c1d90')),
+    /40 lowercase hex/,
+  );
+  assert.throws(
+    () => validateEvidenceUrl(GOOD_URL.replace('8f3c1d90', '8F3C1D90')),
+    /40 lowercase hex/,
+  );
+  assert.throws(
+    () => validateEvidenceUrl(GOOD_URL.replace('8f3c1d90a4b27e5', '8f3c1d90a4b27e5zz')),
+    /40 lowercase hex/,
+  );
+});
+
+test('the URL policy refuses anything that is not the one allowed host', () => {
+  // A lookalike host is the case a naive `includes()` check would let through.
+  const path = 'Temmygabriel/recourse-evidence/8f3c1d90a4b27e56cf0d1a3b8e47f2069cd51a3e/f.md';
+  assert.throws(() => validateEvidenceUrl(`https://evil.example.com/${path}`), /must start with/);
+  assert.throws(
+    () => validateEvidenceUrl(GOOD_URL.replace('raw.githubusercontent.com', 'raw.githubusercontent.com.evil.example')),
+    /must start with/,
+  );
+  assert.throws(
+    () => validateEvidenceUrl(GOOD_URL.replace('https://', 'http://')),
+    /must start with/,
+  );
+  assert.throws(
+    () => validateEvidenceUrl(GOOD_URL.replace('https://', 'https://user@')),
+    /must start with/,
+  );
+});
+
+test('the URL policy refuses a query or fragment', () => {
+  // Either would let the same path serve different bytes on different fetches,
+  // which is precisely what the artifact digest exists to rule out.
+  assert.throws(() => validateEvidenceUrl(`${GOOD_URL}?v=2`), /query or fragment/);
+  assert.throws(() => validateEvidenceUrl(`${GOOD_URL}#section`), /query or fragment/);
+});
+
+test('the URL policy refuses whitespace anywhere', () => {
+  // The character class is spelled out rather than using `\s`, because JS `\s`
+  // also matches U+00A0 and the contract does not — a superset here would make
+  // the relayer refuse URLs the escrow had already accepted.
+  for (const ws of [' ', '\t', '\n', '\r']) {
+    assert.throws(
+      () => validateEvidenceUrl(GOOD_URL.replace('illustrations', `illustr${ws}ations`)),
+      /whitespace/,
+    );
+  }
+});
+
+test('the URL policy refuses missing owner, repo, commit, or path', () => {
+  const P = 'https://raw.githubusercontent.com/';
+  assert.throws(() => validateEvidenceUrl(`${P}/repo/${'a'.repeat(40)}/f.md`), /owner is empty/);
+  assert.throws(() => validateEvidenceUrl(`${P}owner//${'a'.repeat(40)}/f.md`), /repo is empty/);
+  assert.throws(() => validateEvidenceUrl(`${P}owner/repo`), /repo is unterminated/);
+  assert.throws(() => validateEvidenceUrl(`${P}owner/repo/${'a'.repeat(40)}`), /path after the commit/);
+  assert.throws(() => validateEvidenceUrl(`${P}owner/repo/${'a'.repeat(40)}/`), /name a path/);
+  // The bare host is the degenerate case of "no owner".
+  assert.throws(() => validateEvidenceUrl(P), /owner is empty/);
 });
 
 // ---------------------------------------------------------------------------

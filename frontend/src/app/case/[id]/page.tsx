@@ -14,6 +14,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useCallback } from 'react';
 
+import { artifactLabel } from '@/components/ArtifactRef';
 import { DocBody, DocCard, Field, Loading, Notice } from '@/components/Document';
 import { PromiseVsEvidence } from '@/components/PromiseVsEvidence';
 import { STAGE } from '@/lib/abi';
@@ -124,6 +125,29 @@ export default function CasePage() {
               {purchase.deliveryNotes.trim() === ''
                 ? 'None submitted'
                 : `${purchase.deliveryNotes.length} characters, locked`}
+            </Field>
+
+            {/*
+              Just the name of the file here, not the full ArtifactRef below.
+              This card is the case's metadata — amounts, dates, what exists —
+              and the comparison card further down is where the file is actually
+              examined, fingerprint and all. Naming it in both places would make
+              the reader check two buttons to answer one question.
+            */}
+            <Field label="Delivered file">
+              {purchase.deliveryUrl === '' ? (
+                'None pinned'
+              ) : (
+                <a
+                  href={purchase.deliveryUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="ident no-underline hover:underline"
+                  title={purchase.deliveryUrl}
+                >
+                  {artifactLabel(purchase.deliveryUrl)}
+                </a>
+              )}
             </Field>
 
             {/*

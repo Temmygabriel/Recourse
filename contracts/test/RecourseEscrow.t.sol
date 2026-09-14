@@ -57,6 +57,21 @@ contract RecourseEscrowTest is Test {
     string constant OTHER_DISPUTE_NOTES =
         "One illustration only, and it was a flat export rather than layered source.";
 
+    /// @dev A commit-pinned raw URL — the only shape `submitDelivery` accepts.
+    ///      Nothing in these tests depends on it resolving (Foundry has no
+    ///      network); what is under test is the *shape*, which is exactly what
+    ///      the contract checks. The shape rules are exercised directly in
+    ///      `test_Deliver_Url*` below.
+    string constant DELIVERY_URL =
+        "https://raw.githubusercontent.com/Temmygabriel/recourse-evidence/8f3c1d90a4b27e56cf0d1a3b8e47f2069cd51a3e/illustrations/delivery.md";
+
+    /// @dev Stands in for the sha256 the seller commits over the artifact.
+    ///      The escrow only checks that it is non-zero — the bytes it describes
+    ///      are the judgment layer's business — so a fixed constant is enough
+    ///      and keeps every test deterministic.
+    bytes32 constant ARTIFACT_HASH =
+        0x9f2b1c4e6a8d0f3b5e7c9a1d4f6b8e0c2a4d6f8b0e2c4a6d8f0b2e4c6a8d0f2b;
+
     // ---------------------------------------------------------------------
     // Setup
     // ---------------------------------------------------------------------
@@ -126,10 +141,22 @@ contract RecourseEscrowTest is Test {
         return _fundedOn(escrow);
     }
 
+    /// @dev Almost every test wants "delivered, with the usual evidence". The
+    ///      URL-and-hash variant exists for the handful that need a specific
+    ///      one, so call sites stay readable.
     function _deliveredOn(RecourseEscrow e, string memory notes) internal returns (uint256 id) {
+        return _deliveredAt(e, DELIVERY_URL, ARTIFACT_HASH, notes);
+    }
+
+    function _deliveredAt(
+        RecourseEscrow e,
+        string memory url,
+        bytes32 artifactHash,
+        string memory notes
+    ) internal returns (uint256 id) {
         id = _fundedOn(e);
         vm.prank(seller);
-        e.submitDelivery(id, notes);
+        e.submitDelivery(id, url, artifactHash, notes);
     }
 
     function _delivered() internal returns (uint256) {
@@ -333,7 +360,7 @@ contract RecourseEscrowTest is Test {
         vm.prank(buyer);
         escrow.purchase(id);
         vm.prank(seller);
-        escrow.submitDelivery(id, DELIVERY_NOTES);
+        escrow.submitDelivery(id, DELIVERY_URL, ARTIFACT_HASH, DELIVERY_NOTES);
         vm.prank(buyer);
         escrow.openDispute(id, 0x1, DISPUTE_NOTES);
 
@@ -374,7 +401,7 @@ contract RecourseEscrowTest is Test {
         vm.prank(buyer);
         escrow.purchase(id);
         vm.prank(seller);
-        escrow.submitDelivery(id, DELIVERY_NOTES);
+        escrow.submitDelivery(id, DELIVERY_URL, ARTIFACT_HASH, DELIVERY_NOTES);
         vm.prank(buyer);
         escrow.openDispute(id, 0x1, DISPUTE_NOTES);
 
@@ -909,21 +936,21 @@ contract RecourseEscrowTest is Test {
 
         vm.prank(seller);
         vm.expectRevert("delivery late");
-        escrow.submitDelivery(id, DELIVERY_NOTES);
+        escrow.submitDelivery(id, DELIVERY_URL, ARTIFACT_HASH, DELIVERY_NOTES);
     }
 
     function test_Deliver_ByNonSellerRejected() public {
         uint256 id = _funded();
         vm.prank(stranger);
         vm.expectRevert("not seller");
-        escrow.submitDelivery(id, DELIVERY_NOTES);
+        escrow.submitDelivery(id, DELIVERY_URL, ARTIFACT_HASH, DELIVERY_NOTES);
     }
 
     function test_Deliver_TwiceRejected() public {
         uint256 id = _delivered();
         vm.prank(seller);
         vm.expectRevert("not funded");
-        escrow.submitDelivery(id, DELIVERY_NOTES);
+        escrow.submitDelivery(id, DELIVERY_URL, ARTIFACT_HASH, DELIVERY_NOTES);
     }
 
     function test_CancelOffer_UnpurchasedWorks() public {
@@ -1006,7 +1033,7 @@ contract RecourseEscrowTest is Test {
         uint64 deliveredAt = uint64(block.timestamp);
 
         vm.prank(seller);
-        escrow.submitDelivery(id, DELIVERY_NOTES);
+        escrow.submitDelivery(id, DELIVERY_URL, ARTIFACT_HASH, DELIVERY_NOTES);
 
         assertEq(escrow.reviewDeadline(id), deliveredAt + REVIEW_WINDOW);
     }
@@ -1195,14 +1222,205 @@ contract RecourseEscrowTest is Test {
         uint256 id = _funded();
         vm.prank(seller);
         vm.expectRevert("deliveryNotes blank");
-        escrow.submitDelivery(id, "   ");
+        escrow.submitDelivery(id, DELIVERY_URL, ARTIFACT_HASH, "   ");
     }
 
     function test_Deliver_OverlongNotesRejected() public {
         uint256 id = _funded();
         vm.prank(seller);
         vm.expectRevert("deliveryNotes length");
-        escrow.submitDelivery(id, _repeat("d", 2_001));
+        escrow.submitDelivery(id, DELIVERY_URL, ARTIFACT_HASH, _repeat("d", 2_001));
+    }
+
+    // =====================================================================
+    // Delivery URL policy
+    // =====================================================================
+    //
+    // The URL is the one piece of delivery evidence this contract can check
+    // without a network, so it checks it properly. Every case below is a URL
+    // that would *work* for an honest seller on the day they submit it, and
+    // would let a dishonest one — or merely an unlucky one — hand two different
+    // artifacts to two different validators later. A hash pin freezes content;
+    // these rules are what keep the URL from moving underneath it.
+
+    function _urlWithCommit(string memory commit) internal pure returns (string memory) {
+        return string.concat(
+            "https://raw.githubusercontent.com/Temmygabriel/recourse-evidence/",
+            commit,
+            "/illustrations/delivery.md"
+        );
+    }
+
+    function _expectUrlRejected(string memory url, string memory reason) internal {
+        uint256 id = _funded();
+        vm.prank(seller);
+        vm.expectRevert(bytes(reason));
+        escrow.submitDelivery(id, url, ARTIFACT_HASH, DELIVERY_NOTES);
+    }
+
+    function test_Deliver_StoresUrlAndArtifactHash() public {
+        uint256 id = _deliveredAt(escrow, DELIVERY_URL, ARTIFACT_HASH, DELIVERY_NOTES);
+
+        assertEq(escrow.deliveryUrl(id), DELIVERY_URL);
+        assertEq(escrow.artifactHash(id), ARTIFACT_HASH);
+        assertEq(
+            uint256(escrow.getPurchase(id).stage), uint256(RecourseEscrow.Stage.DELIVERED)
+        );
+    }
+
+    /// @dev Plain http. Anyone on the path can rewrite the response, which turns
+    ///      the hash check into a check on whatever the attacker felt like
+    ///      serving — so the scheme is not a style preference here.
+    function test_Deliver_RejectsPlainHttp() public {
+        _expectUrlRejected(
+            string.concat(
+                "http://raw.githubusercontent.com/Temmygabriel/recourse-evidence/",
+                "8f3c1d90a4b27e56cf0d1a3b8e47f2069cd51a3e/illustrations/delivery.md"
+            ),
+            "url: not a raw.githubusercontent.com path"
+        );
+    }
+
+    /// @dev A suffix-matching bug would let both of these through, since each
+    ///      one *contains* the allowlisted host — just not at the front.
+    function test_Deliver_RejectsLookalikeHost() public {
+        _expectUrlRejected(
+            "https://evil.example.com/raw.githubusercontent.com/Temmygabriel/repo/8f3c1d90a4b27e56cf0d1a3b8e47f2069cd51a3e/f.md",
+            "url: not a raw.githubusercontent.com path"
+        );
+
+        _expectUrlRejected(
+            "https://raw.githubusercontent.com.evil.example/Temmygabriel/repo/8f3c1d90a4b27e56cf0d1a3b8e47f2069cd51a3e/f.md",
+            "url: not a raw.githubusercontent.com path"
+        );
+    }
+
+    /// @dev THE test in this section. `main` is a branch: it resolves today and
+    ///      something else after a force-push, so evidence committed under it is
+    ///      not evidence of anything. Refusing it is what makes the commit SHA
+    ///      a commitment rather than a hint.
+    function test_Deliver_RejectsBranchInsteadOfCommit() public {
+        _expectUrlRejected(_urlWithCommit("main"), "url: commit");
+        _expectUrlRejected(_urlWithCommit("HEAD"), "url: commit");
+    }
+
+    function test_Deliver_RejectsTagInsteadOfCommit() public {
+        _expectUrlRejected(_urlWithCommit("v1.2.3"), "url: commit");
+    }
+
+    /// @dev A 39-character commit is caught by the hex walk rather than by the
+    ///      length check, because the character that would have been the
+    ///      fortieth is the `/`.
+    function test_Deliver_RejectsShortCommit() public {
+        _expectUrlRejected(
+            _urlWithCommit("8f3c1d90a4b27e56cf0d1a3b8e47f2069cd51a3"),
+            "url: commit must be 40 lowercase hex"
+        );
+    }
+
+    function test_Deliver_RejectsNonHexCommit() public {
+        _expectUrlRejected(
+            _urlWithCommit("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"),
+            "url: commit must be 40 lowercase hex"
+        );
+    }
+
+    /// @dev GitHub serves the same commit for uppercase hex, so this would
+    ///      resolve — but only one spelling is the canonical one, and accepting
+    ///      both would mean the stored URL string no longer identifies the
+    ///      evidence uniquely.
+    function test_Deliver_RejectsUppercaseCommit() public {
+        _expectUrlRejected(
+            _urlWithCommit("8F3C1D90A4B27E56CF0D1A3B8E47F2069CD51A3E"),
+            "url: commit must be 40 lowercase hex"
+        );
+    }
+
+    /// @dev Both of these can serve different bytes on two consecutive fetches,
+    ///      which is precisely the failure that would make two validators
+    ///      disagree over a hash neither of them got wrong.
+    function test_Deliver_RejectsQueryString() public {
+        _expectUrlRejected(
+            string.concat(_urlWithCommit("8f3c1d90a4b27e56cf0d1a3b8e47f2069cd51a3e"), "?v=2"),
+            "url: no query or fragment"
+        );
+    }
+
+    function test_Deliver_RejectsFragment() public {
+        _expectUrlRejected(
+            string.concat(_urlWithCommit("8f3c1d90a4b27e56cf0d1a3b8e47f2069cd51a3e"), "#top"),
+            "url: no query or fragment"
+        );
+    }
+
+    function test_Deliver_RejectsMissingPath() public {
+        _expectUrlRejected(
+            string.concat(
+                "https://raw.githubusercontent.com/Temmygabriel/recourse-evidence/",
+                "8f3c1d90a4b27e56cf0d1a3b8e47f2069cd51a3e/"
+            ),
+            "url: no path"
+        );
+    }
+
+    function test_Deliver_RejectsMissingRepo() public {
+        _expectUrlRejected(
+            string.concat(
+                "https://raw.githubusercontent.com/Temmygabriel//",
+                "8f3c1d90a4b27e56cf0d1a3b8e47f2069cd51a3e/illustrations/delivery.md"
+            ),
+            "url: repo empty"
+        );
+    }
+
+    function test_Deliver_RejectsBlankUrl() public {
+        _expectUrlRejected("   ", "deliveryUrl blank");
+    }
+
+    function test_Deliver_RejectsOverlongUrl() public {
+        _expectUrlRejected(
+            string.concat(
+                "https://raw.githubusercontent.com/Temmygabriel/recourse-evidence/",
+                "8f3c1d90a4b27e56cf0d1a3b8e47f2069cd51a3e/",
+                _repeat("p", 600)
+            ),
+            "deliveryUrl length"
+        );
+    }
+
+    /// @dev A zero digest would mean "the seller committed to nothing", which
+    ///      is indistinguishable from a delivery that was never made. The
+    ///      judgment layer treats a mismatch as fault, so it must not be
+    ///      possible to reach that state by submitting zero.
+    function test_Deliver_RejectsZeroArtifactHash() public {
+        uint256 id = _funded();
+        vm.prank(seller);
+        vm.expectRevert("artifactHash=0");
+        escrow.submitDelivery(id, DELIVERY_URL, bytes32(0), DELIVERY_NOTES);
+    }
+
+    /// @dev A URL that is rejected must leave the purchase exactly where it was:
+    ///      still FUNDED, still deliverable, nothing written. A rejection that
+    ///      half-applied would strand the buyer's money on a purchase the seller
+    ///      could no longer deliver.
+    function test_Deliver_RejectedUrlLeavesPurchaseDeliverable() public {
+        uint256 id = _funded();
+
+        vm.prank(seller);
+        vm.expectRevert(bytes("url: commit"));
+        escrow.submitDelivery(id, _urlWithCommit("main"), ARTIFACT_HASH, DELIVERY_NOTES);
+
+        assertEq(
+            uint256(escrow.getPurchase(id).stage),
+            uint256(RecourseEscrow.Stage.FUNDED),
+            "a rejected URL must not move the state machine"
+        );
+        assertEq(escrow.deliveryUrl(id), "", "nothing written");
+
+        // And the seller can still deliver properly afterwards.
+        vm.prank(seller);
+        escrow.submitDelivery(id, DELIVERY_URL, ARTIFACT_HASH, DELIVERY_NOTES);
+        assertEq(escrow.deliveryUrl(id), DELIVERY_URL);
     }
 
     // =====================================================================
@@ -1232,7 +1450,7 @@ contract RecourseEscrowTest is Test {
         vm.prank(brokeBuyer);
         escrow.purchase(id);
         vm.prank(seller);
-        escrow.submitDelivery(id, DELIVERY_NOTES);
+        escrow.submitDelivery(id, DELIVERY_URL, ARTIFACT_HASH, DELIVERY_NOTES);
 
         // Every USDC the buyer had went into escrow, so the bond cannot be pulled.
         vm.prank(brokeBuyer);
@@ -1536,8 +1754,36 @@ contract RecourseEscrowTest is Test {
         assertEq(escrow.disputeHash(id), sha256(bytes(DISPUTE_NOTES)));
         assertEq(
             escrow.evidenceRoot(id),
-            keccak256(abi.encode(sha256(bytes(DELIVERY_NOTES)), sha256(bytes(DISPUTE_NOTES)))),
-            "evidence root is derived from stored text, never supplied"
+            keccak256(
+                abi.encode(
+                    sha256(bytes(DELIVERY_NOTES)),
+                    sha256(bytes(DISPUTE_NOTES)),
+                    ARTIFACT_HASH
+                )
+            ),
+            "evidence root is derived from stored text and the committed artifact, never supplied"
+        );
+    }
+
+    /// @dev The artifact hash is the one commitment a caller supplies, so the
+    ///      root has to bind it — otherwise a verdict reached about one artifact
+    ///      could be replayed against a purchase that committed to a different
+    ///      one. Two purchases that differ *only* in the artifact hash must
+    ///      therefore have different evidence roots; if the third field were
+    ///      dropped from the encoding, this is the test that would go red.
+    function test_EvidenceRoot_BindsTheArtifactHash() public {
+        uint256 id = _deliveredAt(escrow, DELIVERY_URL, ARTIFACT_HASH, DELIVERY_NOTES);
+        uint256 other =
+            _deliveredAt(escrow, DELIVERY_URL, bytes32(uint256(ARTIFACT_HASH) ^ 1), DELIVERY_NOTES);
+
+        // Same seller, same promise, same notes, same URL — one byte of the
+        // committed digest apart.
+        assertEq(escrow.deliveryHash(id), escrow.deliveryHash(other), "notes are identical");
+        assertEq(escrow.artifactHash(id), ARTIFACT_HASH);
+        assertEq(escrow.artifactHash(other), bytes32(uint256(ARTIFACT_HASH) ^ 1));
+        assertTrue(
+            escrow.evidenceRoot(id) != escrow.evidenceRoot(other),
+            "a different artifact must produce a different evidence root"
         );
     }
 
@@ -1585,7 +1831,7 @@ contract RecourseEscrowTest is Test {
             uint256 id = _funded();
 
             vm.prank(seller);
-            escrow.submitDelivery(id, vectors[i].text);
+            escrow.submitDelivery(id, DELIVERY_URL, ARTIFACT_HASH, vectors[i].text);
             assertEq(escrow.deliveryHash(id), vectors[i].digest, vectors[i].name);
 
             vm.prank(buyer);

@@ -51,6 +51,10 @@ export interface Purchase {
   readonly promiseText: string;
   readonly rubric: readonly string[];
   readonly deliveryNotes: string;
+  /** Where the delivered artifact lives. Frozen by the seller at delivery. */
+  readonly deliveryUrl: string;
+  /** sha256 of the bytes at `deliveryUrl`, committed by the seller. */
+  readonly artifactHash: Hex;
   readonly disputeNotes: string;
 }
 
@@ -220,7 +224,27 @@ export async function chainCommitments(ctx: BaseContext, id: number): Promise<Ch
   return { promiseHash, rubricHash, deliveryHash, disputeHash, evidenceRoot };
 }
 
-/** Recompute every commitment from the purchase text, locally. */
+/**
+ * Recompute every commitment from the purchase text, locally.
+ *
+ * Four of the five inputs come from text the relayer just read off the chain,
+ * so it re-derives them the same way Solidity does. The fifth —
+ * `artifactHash` — is the exception, and the asymmetry is worth being explicit
+ * about: the relayer cannot derive it, because deriving it means fetching the
+ * URL and hashing what the server actually serves, and the relayer deliberately
+ * does not fetch anything. `p.artifactHash` is the value the escrow stored when
+ * the seller delivered. Its truthfulness is not this function's problem; the
+ * judgment contract re-fetches and re-hashes, and disagreement between the two
+ * is a deterministic full refund.
+ *
+ * What `verifyCommitments` therefore proves about `evidenceRoot` is narrower
+ * than it sounds, but it is exactly the thing that just changed: that the
+ * relayer's *encoding* of the three-field tuple matches Solidity's. That is a
+ * live bug class now that this is `abi.encode(deliveryHash, disputeHash,
+ * artifactHash)` — a root built from the old two-field concatenation would be a
+ * silently different value, and every `settle()` would revert with "evidence
+ * mismatch" only after the GenLayer fee had been spent.
+ */
 export function localCommitments(p: Purchase): LocalCommitments {
   const deliveryHash = sha256Hex(p.deliveryNotes);
   const disputeHash = sha256Hex(p.disputeNotes);
@@ -229,7 +253,7 @@ export function localCommitments(p: Purchase): LocalCommitments {
     rubricHash: rubricHashHex(p.rubric),
     deliveryHash,
     disputeHash,
-    evidenceRoot: evidenceRootHex(deliveryHash, disputeHash),
+    evidenceRoot: evidenceRootHex(deliveryHash, disputeHash, p.artifactHash),
   };
 }
 

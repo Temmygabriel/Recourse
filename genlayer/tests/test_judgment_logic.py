@@ -44,21 +44,75 @@ VECTORS_PATH = ROOT / "docs" / "vectors" / "hash-vectors.json"
 # ---------------------------------------------------------------------------
 
 
+class FakeResponse:
+    """Stands in for `gl.nondet.web.Response(status, headers, body)`."""
+
+    def __init__(self, status=200, body=b"", headers=None):
+        self.status = status
+        self.body = body
+        self.headers = headers or {}
+
+
+class FakeNet:
+    """The controllable network and model behind the stub.
+
+    Tests assign `FAKE.web` and `FAKE.llm` to plain functions. Both start out
+    refusing to answer, so a test that forgets to install a mock fails loudly
+    with "no web mock installed" rather than silently judging an empty artifact.
+    """
+
+    def __init__(self):
+        self.web = lambda url: (_ for _ in ()).throw(
+            AssertionError(f"no web mock installed, but the contract fetched {url}")
+        )
+        self.llm = lambda prompt, response_format="text": (_ for _ in ()).throw(
+            AssertionError("no llm mock installed, but the contract called the model")
+        )
+        self.web_calls = []
+        self.llm_calls = []
+
+    def reset(self):
+        self.__init__()
+
+
+FAKE = FakeNet()
+
+
 def _install_genlayer_stub():
-    """Minimal stand-in for the SDK, just enough to import the contract.
+    """Minimal stand-in for the SDK, just enough to import and run the contract.
 
     The contract does `import genlayer as gl` (v0.3.0 shape), so the stub must
-    mirror that layout: the `gl` namespace holds `contract.Contract` as the base
-    class, `public` as a decorator factory, `storage.TreeMap` and `u32` for the
-    storage annotations, and `vm.UserError`. The flat `TreeMap`/`u32`/`UserError`
-    of the older v0.2.x surface are deliberately NOT provided — if the contract
-    ever drifts back to the old names, this stub fails the import loudly rather
-    than passing and hiding the regression.
+    mirror that layout: `contract.Contract` as the base class, `public` as a
+    decorator factory, `storage.TreeMap` and `u32` for the storage annotations,
+    `vm.UserError`, `vm.Return`, `vm.run_nondet`, and `nondet.web.get` /
+    `nondet.exec_prompt`. The flat `TreeMap`/`u32`/`UserError` of the older
+    v0.2.x surface are deliberately NOT provided — if the contract ever drifts
+    back to the old names, this stub fails the import loudly rather than passing
+    and hiding the regression.
+
+    This is NOT a substitute for the real VM, and the contract's own tests say
+    so: the stub is permissive by construction and validates nothing about SDK
+    signatures. It exists so the *logic* — the digest check, the fault/transient
+    split, the prompt assembly — can be exercised in milliseconds without a
+    network or a deployment.
     """
     module = types.ModuleType("genlayer")
 
     class _Contract:
-        pass
+        """Base class. Storage slots are materialised lazily as plain dicts.
+
+        The real VM builds annotated storage (`TreeMap`, `u32`) from the class
+        body at deploy time. Here a dict is enough to exercise the write path,
+        and `__getattr__` only runs when normal lookup fails, so a name the
+        subclass actually sets is left alone.
+        """
+
+        def __getattr__(self, name):
+            if name.startswith("__"):
+                raise AttributeError(name)
+            value = {}
+            object.__setattr__(self, name, value)
+            return value
 
     class _Decorator:
         """Accepts both `@gl.public.view` and `@gl.public.view(...)`."""
@@ -74,6 +128,12 @@ def _install_genlayer_stub():
     class _UserError(Exception):
         pass
 
+    class _Return:
+        """What the runtime hands a validator: the leader's value, wrapped."""
+
+        def __init__(self, calldata):
+            self.calldata = calldata
+
     class _TreeMap:
         def __class_getitem__(cls, _item):
             return cls
@@ -85,6 +145,28 @@ def _install_genlayer_stub():
     class _Storage:
         TreeMap = _TreeMap
 
+    def _web_get(url, *, headers=None):
+        FAKE.web_calls.append(url)
+        return FAKE.web(url)
+
+    def _exec_prompt(prompt, **config):
+        FAKE.llm_calls.append(prompt)
+        return FAKE.llm(prompt, config.get("response_format", "text"))
+
+    def _run_nondet(leader_fn, validator_fn):
+        """Model the consensus step, single-validator.
+
+        The leader runs, its value is wrapped, and the validator gets its say on
+        that wrapper — the same shape direct mode uses. A validator that rejects
+        fails the evaluation, which in the real VM reverts the contract and
+        leaves state untouched. Raising here is what makes the "an outage must
+        not become a verdict" cases testable.
+        """
+        result = leader_fn()
+        if not validator_fn(_Return(result)):
+            raise RuntimeError("validators disagreed with the leader")
+        return result
+
     # `import genlayer as gl` binds `gl` to the genlayer PACKAGE, so `gl.contract`
     # is the top-level `genlayer.contract` submodule, not a namespace nested under
     # a `gl` attribute. Everything the contract reaches for hangs off the module.
@@ -92,8 +174,15 @@ def _install_genlayer_stub():
     module.storage = _Storage()
     module.public = _Decorator()
     module.u32 = _U32
-    module.nondet = types.SimpleNamespace()
-    module.vm = types.SimpleNamespace(UserError=_UserError)
+    module.nondet = types.SimpleNamespace(
+        web=types.SimpleNamespace(get=_web_get),
+        exec_prompt=_exec_prompt,
+    )
+    module.vm = types.SimpleNamespace(
+        UserError=_UserError,
+        Return=_Return,
+        run_nondet=_run_nondet,
+    )
 
     sys.modules["genlayer"] = module
 
@@ -339,6 +428,460 @@ def test_clamp_output_always_passes_escrow_coherence():
                     checked += 1
 
     assert checked > 1_000, f"expected a broad sweep, only checked {checked}"
+
+
+# ---------------------------------------------------------------------------
+# The evidence path: fetch, digest, decode
+#
+# These are the cases the escrow cannot check and the model must never be asked
+# about. Every one of them is a place where a plausible-looking implementation
+# hands a decision to a language model that arithmetic should have made, or
+# worse, turns an outage into a breach.
+# ---------------------------------------------------------------------------
+
+URL = (
+    "https://raw.githubusercontent.com/Temmygabriel/recourse-evidence/"
+    "8f3c1d90a4b27e56cf0d1a3b8e47f2069cd51a3e/artifacts/article.md"
+)
+
+PROMISE = "Write a 900-word article explaining how the escrow holds funds."
+RUBRIC = [
+    "The article is at least 850 words long.",
+    "It names the escrow contract address.",
+    "It explains what the relayer does, and states that the relayer is trusted.",
+]
+DELIVERY_NOTES = "Published the article to the repository at the committed URL."
+DISPUTE_NOTES = "Requirement 3 is not met; the article never says the relayer is trusted."
+
+ARTIFACT = (
+    "The escrow contract at 0x32288128Ff07Fc9e443161c1F336b784508a056A holds the buyer's "
+    "USDC until a verdict arrives. The relayer is a trusted prototype component: it carries "
+    "the verdict from GenLayer to Base, and this system is not trustless."
+)
+ARTIFACT_SHA = judgment._sha256_hex_bytes(ARTIFACT.encode("utf-8"))
+
+
+def _raises(fn, exc_types, what):
+    """Assert `fn()` raises one of `exc_types`. No pytest in this harness."""
+    try:
+        fn()
+    except exc_types:
+        return
+    except Exception as exc:  # noqa: BLE001 - report the wrong exception clearly
+        raise AssertionError(f"{what}: raised {exc!r}, expected {exc_types}") from exc
+    raise AssertionError(f"{what}: did not raise")
+
+
+def _release_reply(prompt, response_format="text"):
+    return {
+        "outcome": "RELEASE",
+        "refund_bps": 0,
+        "criteria_met": [True] * len(RUBRIC),
+        "reason": "The artifact states each requirement in turn.",
+    }
+
+
+def _judge(body, claimed_hash=None, url=URL, llm=None, status=200):
+    """Run `_judge_delivery` once against a fake network and model."""
+    FAKE.reset()
+    FAKE.web = lambda _url: FakeResponse(status, body)
+    FAKE.llm = llm or _release_reply
+    return judgment._judge_delivery(
+        url,
+        ARTIFACT_SHA if claimed_hash is None else claimed_hash,
+        PROMISE,
+        RUBRIC,
+        [2],
+        DELIVERY_NOTES,
+        DISPUTE_NOTES,
+    )
+
+
+@test
+def test_matching_digest_judges_the_artifact():
+    """The happy path, and the one that proves the artifact reaches the model."""
+    seen = {}
+
+    def llm(prompt, response_format="text"):
+        seen["prompt"] = prompt
+        return _release_reply(prompt)
+
+    verdict = _judge(ARTIFACT.encode("utf-8"), claimed_hash=ARTIFACT_SHA, llm=llm)
+
+    assert verdict["outcome"] == "RELEASE", verdict
+    assert ARTIFACT[:80] in seen["prompt"], "the fetched bytes must reach the model"
+    assert escrow_accepts(verdict["outcome"], verdict["refund_bps"], verdict["criteria_met"])
+
+
+@test
+def test_digest_mismatch_is_a_full_refund_and_never_reaches_the_model():
+    """THE case this whole design exists for.
+
+    A seller who publishes different bytes than they committed to must lose the
+    sale — and the decision must be arithmetic, not a model's opinion. If the
+    model were consulted here, a convincing artifact could survive a failed hash
+    check, which is exactly the conflation the check exists to prevent.
+    """
+    body = b"A completely different document that reads very convincingly."
+    verdict = _judge(body, claimed_hash=ARTIFACT_SHA)
+
+    assert verdict["outcome"] == "FULL_REFUND", verdict
+    assert verdict["refund_bps"] == 10_000, verdict
+    assert not any(verdict["criteria_met"]), verdict
+    assert FAKE.llm_calls == [], "a tampered artifact must never reach the model"
+    assert escrow_accepts(verdict["outcome"], verdict["refund_bps"], verdict["criteria_met"])
+
+
+@test
+def test_a_single_flipped_byte_is_caught():
+    """The digest is over bytes, not over meaning — one byte is enough."""
+    body = ARTIFACT.encode("utf-8")
+    tampered = body[:-1] + bytes([body[-1] ^ 0x01])
+
+    verdict = _judge(tampered, claimed_hash=ARTIFACT_SHA)
+    assert verdict["outcome"] == "FULL_REFUND", verdict
+    assert FAKE.llm_calls == []
+
+
+@test
+def test_missing_artifact_is_a_full_refund_and_never_reaches_the_model():
+    """404 is an answer, not an outage.
+
+    If this were treated as transient, a seller who deleted the repository
+    holding the evidence would leave the dispute unjudgeable forever and strand
+    the buyer's escrow with no state it could ever reach.
+    """
+    for status in (404, 410):
+        verdict = _judge(b"", claimed_hash=ARTIFACT_SHA, status=status)
+        assert verdict["outcome"] == "FULL_REFUND", (status, verdict)
+        assert verdict["refund_bps"] == 10_000, verdict
+        assert FAKE.llm_calls == [], "a missing artifact must never reach the model"
+        assert "could not be retrieved" in verdict["reason"], verdict["reason"]
+
+
+@test
+def test_a_host_outage_is_never_a_verdict():
+    """The single most important rule in the evidence policy.
+
+    A 5xx, a timeout, or a DNS failure must fail the evaluation and leave state
+    untouched, so the dispute stays retryable. Scoring an outage as a breach
+    would let a bad afternoon at GitHub take the seller's money — and scoring it
+    as a release would take the buyer's.
+    """
+    for status in (500, 502, 503, 429):
+        _raises(
+            lambda s=status: _judge(b"whatever", claimed_hash=ARTIFACT_SHA, status=s),
+            judgment.gl.vm.UserError,
+            f"HTTP {status} must fail the evaluation rather than decide it",
+        )
+        assert FAKE.llm_calls == []
+
+    # And a transport-level failure is the same class of thing.
+    def _boom(_url):
+        raise ConnectionError("connection reset by peer")
+
+    FAKE.reset()
+    FAKE.web = _boom
+    _raises(
+        lambda: judgment._judge_delivery(
+            URL, ARTIFACT_SHA, PROMISE, RUBRIC, [2], DELIVERY_NOTES, DISPUTE_NOTES
+        ),
+        ConnectionError,
+        "a transport failure must propagate",
+    )
+
+
+@test
+def test_a_raised_404_is_recognised_as_gone_not_as_an_outage():
+    """The SDK may raise rather than return a status.
+
+    Whether `NondetException` carries the HTTP status is not something the
+    contract can rely on, so the message is inspected. A 404 arriving as an
+    exception must still resolve to a refund rather than to an infinite retry.
+    """
+    def _boom(_url):
+        raise RuntimeError("web request failed with status 404")
+
+    FAKE.reset()
+    FAKE.web = _boom
+    verdict = judgment._judge_delivery(
+        URL, ARTIFACT_SHA, PROMISE, RUBRIC, [2], DELIVERY_NOTES, DISPUTE_NOTES
+    )
+    assert verdict["outcome"] == "FULL_REFUND", verdict
+    assert FAKE.llm_calls == []
+
+
+@test
+def test_unusable_artifacts_are_faults_not_outages():
+    """Empty, binary, NUL-riddled and oversized are the seller's own bytes.
+
+    Each must produce a refund with a reason naming the rule, and none may reach
+    the model — there is nothing to read.
+    """
+    cases = [
+        ("empty body", b"", 0),
+        ("PNG magic bytes", b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR", 0),
+        ("lone NUL", b"looks like text\x00but is not", 0),
+        ("over the byte cap", b"x" * (judgment.MAX_EVIDENCE_BYTES + 1), 0),
+        ("only whitespace", b"   \n\t  ", 0),
+    ]
+    for name, body, _ in cases:
+        digest = judgment._sha256_hex_bytes(body)
+        verdict = _judge(body, claimed_hash=digest)
+        assert verdict["outcome"] == "FULL_REFUND", (name, verdict)
+        assert verdict["refund_bps"] == 10_000, (name, verdict)
+        assert FAKE.llm_calls == [], f"{name} must never reach the model"
+        assert "cannot be judged" in verdict["reason"], (name, verdict["reason"])
+
+
+@test
+def test_long_text_is_truncated_loudly_not_rejected():
+    """A long article is real work; an unreadable file is not.
+
+    Truncating silently is the thing that changes what was judged without anyone
+    being told, so the prompt says so and tells the model not to credit a
+    criterion whose evidence would have fallen past the cut.
+    """
+    long_body = ("word " * (judgment.MAX_EVIDENCE_CHARS)).encode("utf-8")
+    assert len(long_body) < judgment.MAX_EVIDENCE_BYTES, "must be under the byte cap"
+
+    seen = {}
+
+    def llm(prompt, response_format="text"):
+        seen["prompt"] = prompt
+        return _release_reply(prompt)
+
+    verdict = _judge(
+        long_body,
+        claimed_hash=judgment._sha256_hex_bytes(long_body),
+        llm=llm,
+    )
+
+    assert verdict["outcome"] == "RELEASE", verdict
+    assert "truncated for length, not edited" in seen["prompt"]
+    assert "must not be treated as met" in seen["prompt"]
+
+
+@test
+def test_the_artifact_is_fenced_and_the_notes_are_demoted():
+    """Prompt assembly: the artifact is evidence, the notes are commentary."""
+    seen = {}
+    verdict = _judge(
+        ARTIFACT.encode("utf-8"),
+        llm=lambda prompt, response_format="text": (
+            seen.update(prompt=prompt) or _release_reply(prompt)
+        ),
+    )
+    assert verdict["outcome"] == "RELEASE"
+
+    prompt = seen["prompt"]
+    assert "THE DELIVERED ARTIFACT" in prompt
+    assert "THE SELLER'S DELIVERY NOTES" in prompt
+    # Rule 8 is what stops a seller talking their way past an artifact that does
+    # not show the work.
+    assert "the artifact governs" in prompt
+    # Every party-authored block is fenced.
+    assert prompt.count("BEGIN_EVIDENCE") == prompt.count("END_EVIDENCE") >= 5
+
+
+# ---------------------------------------------------------------------------
+# URL policy: the judgment layer's own copy of the escrow's rules
+# ---------------------------------------------------------------------------
+
+
+@test
+def test_url_policy_matches_the_escrow():
+    """Same accept/reject table as `test_Deliver_Rejects*` in the Solidity suite.
+
+    The escrow is the authority, but a package can reach this contract without
+    ever having passed through it, so the rules are enforced on both sides and
+    the two tables are meant to be read side by side.
+    """
+    good = [
+        URL,
+        "https://raw.githubusercontent.com/o/r/" + "a" * 40 + "/f.md",
+        "https://raw.githubusercontent.com/o/r/" + "0123456789abcdef" * 2 + "01234567" + "/a/b/c.txt",
+    ]
+    for url in good:
+        judgment._validate_evidence_url(url)
+
+    bad = [
+        ("plain http", "http://raw.githubusercontent.com/o/r/" + "a" * 40 + "/f.md"),
+        ("wrong host", "https://evil.example.com/o/r/" + "a" * 40 + "/f.md"),
+        (
+            "host in the path",
+            "https://evil.example.com/raw.githubusercontent.com/o/r/" + "a" * 40 + "/f.md",
+        ),
+        ("branch", "https://raw.githubusercontent.com/o/r/main/f.md"),
+        ("tag", "https://raw.githubusercontent.com/o/r/v1.2.3/f.md"),
+        ("short commit", "https://raw.githubusercontent.com/o/r/" + "a" * 39 + "/f.md"),
+        ("uppercase commit", "https://raw.githubusercontent.com/o/r/" + "A" * 40 + "/f.md"),
+        ("non-hex commit", "https://raw.githubusercontent.com/o/r/" + "z" * 40 + "/f.md"),
+        ("query", URL + "?v=2"),
+        ("fragment", URL + "#top"),
+        ("space", URL + " x"),
+        ("no path", "https://raw.githubusercontent.com/o/r/" + "a" * 40 + "/"),
+        ("no repo", "https://raw.githubusercontent.com/o//" + "a" * 40 + "/f.md"),
+        ("empty", ""),
+        ("over length", URL + "/" + "p" * 600),
+    ]
+    for name, url in bad:
+        _raises(
+            lambda u=url: judgment._validate_evidence_url(u),
+            judgment.gl.vm.UserError,
+            f"URL should be refused: {name}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# The full `evaluate` path
+# ---------------------------------------------------------------------------
+
+
+def _package(**over):
+    pkg = {
+        "promise_text": PROMISE,
+        "promise_hash": judgment._sha256_hex(PROMISE),
+        "rubric": RUBRIC,
+        "rubric_hash": judgment._rubric_hash(RUBRIC),
+        "delivery_notes": DELIVERY_NOTES,
+        "delivery_hash": judgment._sha256_hex(DELIVERY_NOTES),
+        "dispute_notes": DISPUTE_NOTES,
+        "dispute_hash": judgment._sha256_hex(DISPUTE_NOTES),
+        "disputed_indices": [2],
+        "delivery_url": URL,
+        "artifact_hash": ARTIFACT_SHA,
+    }
+    pkg.update(over)
+    return json.dumps(pkg)
+
+
+def _evaluate(body=ARTIFACT.encode("utf-8"), llm=None, **over):
+    FAKE.reset()
+    FAKE.web = lambda _url: FakeResponse(200, body)
+    FAKE.llm = llm or _release_reply
+    return judgment.RecourseJudgment().evaluate("recourse:84532:0xabc:1", _package(**over))
+
+
+@test
+def test_evaluate_end_to_end():
+    payload = _evaluate()
+    verdict = json.loads(payload)
+    assert verdict["outcome"] == "RELEASE", verdict
+    assert escrow_accepts(verdict["outcome"], verdict["refund_bps"], verdict["criteria_met"])
+    # Canonical form: sorted keys, no incidental whitespace — the relayer hashes
+    # these exact bytes for `decisionDigest`.
+    assert payload == json.dumps(verdict, sort_keys=True, separators=(",", ":"))
+
+
+@test
+def test_evaluate_rejects_a_malformed_artifact_hash():
+    for value in ["", "0x", "zz" * 32, "a" * 63, "a" * 65, "0" * 64, 12345, None]:
+        _raises(
+            lambda v=value: _evaluate(artifact_hash=v),
+            judgment.gl.vm.UserError,
+            f"artifact_hash should be refused: {value!r}",
+        )
+
+
+@test
+def test_an_uppercase_artifact_hash_is_the_same_digest():
+    """Hex case is not information. `_norm_hash` lowercases it, so an uppercase
+    digest is the same commitment and must be accepted.
+
+    This is deliberately unlike the URL rule, where an uppercase commit SHA is
+    refused: there the string *identifies* the resource to a host that serves
+    only one spelling, whereas here it is a value being compared.
+    """
+    verdict = json.loads(_evaluate(artifact_hash=ARTIFACT_SHA.upper()))
+    assert verdict["outcome"] == "RELEASE", verdict
+
+    # And a 0x-prefixed digest is the same value too.
+    verdict = json.loads(_evaluate(artifact_hash="0x" + ARTIFACT_SHA))
+    assert verdict["outcome"] == "RELEASE", verdict
+
+
+@test
+def test_evaluate_rejects_a_tampered_package():
+    """The existing consistency checks still hold, now with the new fields."""
+    _raises(
+        lambda: _evaluate(delivery_notes=DELIVERY_NOTES + " extra"),
+        judgment.gl.vm.UserError,
+        "delivery_notes must not match its committed hash after tampering",
+    )
+    _raises(
+        lambda: _evaluate(rubric=RUBRIC + ["An extra criterion."]),
+        judgment.gl.vm.UserError,
+        "rubric_hash must not match after tampering",
+    )
+    _raises(
+        lambda: _evaluate(disputed_indices=[]),
+        judgment.gl.vm.UserError,
+        "a dispute must name at least one criterion",
+    )
+
+
+@test
+def test_evaluate_fails_when_validators_disagree():
+    """A validator that computes a different outcome fails the evaluation.
+
+    The stub runs a single validator, so disagreement is modelled by making the
+    model answer differently on the second call — which is exactly what a
+    drifting model looks like to the consensus step. The evaluation must fail
+    rather than settle on whichever answer came first.
+    """
+    replies = [
+        {"outcome": "RELEASE", "refund_bps": 0, "criteria_met": [True] * 3, "reason": "met"},
+        {
+            "outcome": "FULL_REFUND",
+            "refund_bps": 10_000,
+            "criteria_met": [False] * 3,
+            "reason": "not met",
+        },
+    ]
+    calls = {"n": 0}
+
+    def llm(prompt, response_format="text"):
+        reply = replies[min(calls["n"], 1)]
+        calls["n"] += 1
+        return reply
+
+    _raises(
+        lambda: _evaluate(llm=llm),
+        RuntimeError,
+        "a validator that disagrees must fail the evaluation",
+    )
+
+
+@test
+def test_a_tampered_delivery_settles_as_a_refund_through_the_full_path():
+    """End to end: replace the artifact, and the court refunds without a model."""
+    FAKE.reset()
+    FAKE.web = lambda _url: FakeResponse(200, b"Substituted content, published later.")
+    FAKE.llm = _release_reply
+
+    verdict = json.loads(judgment.RecourseJudgment().evaluate("k", _package()))
+
+    assert verdict["outcome"] == "FULL_REFUND", verdict
+    assert FAKE.llm_calls == [], "the model must not be consulted on a failed digest"
+    assert escrow_accepts(verdict["outcome"], verdict["refund_bps"], verdict["criteria_met"])
+
+
+@test
+def test_every_rejection_is_acceptable_to_the_escrow():
+    """A rejection the escrow would refuse is worse than no rejection at all.
+
+    The escrow rejects FULL_REFUND with all criteria met, so a `_reject` that
+    left the criteria list empty would burn the settlement instead of refunding
+    the buyer.
+    """
+    for count in (judgment.MIN_CRITERIA, 3, judgment.MAX_CRITERIA):
+        verdict = judgment._reject("some reason", count)
+        assert escrow_accepts(
+            verdict["outcome"], verdict["refund_bps"], verdict["criteria_met"]
+        ), (count, verdict)
+        assert len(verdict["criteria_met"]) == count
+        assert len(verdict["reason"]) <= judgment.MAX_REASON_CHARS
 
 
 # ---------------------------------------------------------------------------

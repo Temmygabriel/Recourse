@@ -738,3 +738,136 @@ docs/        DATA_MODEL.md, SECURITY.md, DEPLOY.md
 - ~~The user's demo/browser wallet address~~ — **answered 2026-09-11.**
   `0x0DE10708F8c6DF7b73068d53def715A70C0f340D`, key in `.secrets/demo.json`.
   Still needs Base Sepolia ETH (it has none), and USDC if it plays the buyer.
+
+---
+
+## D24 — The Project Explorer submission note: format, caps, and what NOT to say
+
+**Source:** `proofmark-submission-note.md` in the repo root, read 2026-09-14. That
+file is the submission form used for a *previous* project (Proofmark). The
+hackathon's requirements are "mostly the same", so it is the template for
+Recourse's note. Read it in full before writing ours — do not work from this
+summary alone.
+
+### Structure to mirror (numbered sections, plain text)
+
+```
+<Title>: GenLayer Project Explorer Submission
+<preamble: fill-in note, date, canonical live contract + address, repo, contract source>
+01: Identity            project name, logo, primary tag, sub-tag(s)
+02: One-liner           (cap 180 chars)
+03: Description         (cap 1000 chars)
+04: Demo video          pattern + walkthrough + [YOU: YouTube link]
+05: The reviewer's path (exact steps, Step 1..N, copy-pasteable values)
+06: Prove the path works, expected overall outcome (cap 500 chars)
+    [EXCLUDED for Recourse — see below]
+Contract links (full explorer URLs)
+07: Send people to it
+Pre-flight checklist
+Sources for every claim
+Honest residue
+```
+
+### Hard constraints the user stated (2026-09-14, verbatim intent)
+
+1. **No markdown symbols.** No `*`, no `>`, no `#`, no `|` tables. The Proofmark
+   note is plain prose with `01:`-style section markers and blank lines only.
+   The `[YOU: ...]` bracket convention is fine and is expected.
+2. **State the character count** for every capped field, in parentheses right
+   after it — e.g. `(166 characters, fits.)`. The user asked specifically that
+   "all the chars count" be noted.
+3. **NO BRADBURY.** This project is on **studio-dev**, which the user also calls
+   **studio-next** — "they are the same". The Proofmark note has an entire
+   "Testnet Bradbury, real validators" subsection because Proofmark deployed to
+   both; Recourse does not, so that subsection is deleted outright, not adapted.
+   Never write the word Bradbury into the Recourse note.
+4. **EXCLUDE the "What did you change?" section.** Proofmark's has one (cap 1000
+   chars) because it was a resubmission. Recourse is a fresh submission: "we
+   getting this right the first time and this is an hackathon, there is no
+   resubmission." Delete the heading and its body.
+5. **Written last.** "All this so comes after rigorous testing of course." The
+   note cites test results, so it cannot be written before the tests exist.
+
+### Still true from the standing constraints
+
+- studio-dev (chain 61997) is the only correct network. `studionet` (61999)
+  serves a different SDK runner and is an automatic failure — see D19/D20.
+- Do not describe the system as trustless. Use: "the relayer is a trusted
+  prototype component; this is testnet-only."
+- Every claim in the note needs a source in the "Sources for every claim"
+  section, and anything unproven belongs in "Honest residue" — Proofmark's note
+  does exactly this, and it is the part that makes the rest credible.
+
+---
+
+## D25 — Provenance / "verify mode": considered, deliberately deferred
+
+**Raised by the user 2026-09-14, thinking out loud:** should a seller prove the
+delivered repo is theirs — e.g. by putting a hash in their GitHub bio — so the
+seller "is not just submitting random work on github and claiming to be his"?
+The user also supplied the counter-argument in the same breath: "or it doesn't
+matter has long the client, i.e buyer gets what he buys accoridng to the
+promise".
+
+**Two different questions, and only one of them is the escrow's:**
+
+1. *Did the buyer get what the promise said?* This is the escrow's question, and
+   it is already answered: the rubric is the promise, the artifact fetch makes
+   the rubric decidable against the real work, and the verdict maps to money.
+   The escrow is a delivery-conformance system, not an authorship system.
+2. *Is the work the seller's own?* This is **not decidable from the artifact
+   bytes.** A judgment layer reading a markdown file cannot tell who wrote it.
+   Today a buyer who wants originality can put "original work" in the rubric,
+   but the model would be guessing — which is exactly the failure mode the
+   contract's deterministic-first design exists to avoid.
+
+**Why a GitHub-bio check is weaker than it sounds.** It proves *control of the
+GitHub account*, not authorship of the commit. Anyone who controls `owner` can
+push someone else's code into `owner/repo`. It also only catches the crude case
+(the artifact points into a repo the seller does not control at all), which is
+real but narrow.
+
+**Why it is not free.** It adds a second host to the judgment path
+(`github.com/<owner>`, HTML, not `raw.githubusercontent.com`), which means a new
+rate-limit and scraping-fragility surface, and it re-opens the outage-versus-
+fault distinction that the current fetch path handles carefully. It would also
+create a new griefing surface if wired into the verdict: a buyer could dispute a
+flawless delivery purely on a missing bio line.
+
+**Decision: deferred, not rejected.** If it is ever built, the shape that fits
+this design is an *annotation*, not a verdict input — the verdict carries
+`repo_owner_verified: true/false` and the reason mentions it, while outcome and
+`refund_bps` ignore it entirely. That informs the buyer without handing anyone a
+lever to grief an honest seller, and it adds no new money path.
+
+**Where this must appear either way:** the README limitations, `docs/SECURITY.md`,
+and the submission note's "Honest residue". The honest sentence is: *the escrow
+guarantees delivery conformance against the buyer's own rubric; it cannot and
+does not verify that the delivered work is the seller's original authorship.*
+
+**D25 addendum — the user pressed on 2026-09-14: does it matter, or do we leave
+it? Won't a reviewer notice a seller can submit work that is not theirs?**
+
+Answer given, and the position: **leave it as is, but name it explicitly.**
+
+It does not matter to *correctness* — the escrow promises conformance to the
+buyer's rubric, never authorship, which is the same contract Upwork and Fiverr
+offer. It is also not the cheap attack it appears to be: exploiting it requires
+finding a public commit-pinned artifact that satisfies this buyer's specific
+rubric, which for bespoke work is harder than doing the job.
+
+It *will* be asked, because it is the obvious attack on any delivery-
+verification system. What makes that a problem is silence, not the gap. The
+position to state, in the README limitations, in `docs/SECURITY.md`, and in the
+submission note's "Honest residue":
+
+  The escrow guarantees delivery conformance against the buyer's own rubric. It
+  does not verify authorship, and cannot: no model can do authorship forensics
+  on a markdown file. A buyer who needs original work should write it as a
+  criterion, which puts it in the judge's scope — the judge can flag a
+  recognisable copy, though it cannot prove provenance. Binding the artifact's
+  repository owner to the seller's wallet is the known next step and is
+  deliberately out of scope for this prototype.
+
+One cheap mitigation, no new mechanism: suggest the originality criterion in the
+UI and docs where buyers write rubrics.

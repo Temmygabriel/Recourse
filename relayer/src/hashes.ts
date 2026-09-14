@@ -26,7 +26,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { concatHex, keccak256, stringToHex, type Hex } from 'viem';
+import { encodeAbiParameters, keccak256, stringToHex, type Hex } from 'viem';
 
 /**
  * sha256 of a string's UTF-8 bytes, as a 0x-prefixed bytes32.
@@ -53,15 +53,36 @@ export function rubricHashHex(rubric: readonly string[]): Hex {
 }
 
 /**
- * keccak256(abi.encode(deliveryHash, disputeHash)).
+ * keccak256(abi.encode(deliveryHash, disputeHash, artifactHash)).
  *
- * Two bytes32 values are already 32-byte aligned, so `abi.encode` of them is
- * their plain concatenation — no length prefix, no padding. viem's `concatHex`
- * does exactly that. If this ever needed a third field, this shortcut would
- * stop being valid and the function would have to use `encodeAbiParameters`.
+ * This used to be `keccak256(concatHex([deliveryHash, disputeHash]))`, with a
+ * comment predicting that a third field would invalidate the shortcut. The
+ * third field arrived (the seller's artifact digest, committed at delivery), so
+ * the shortcut is gone and this is a real ABI encode.
+ *
+ * The distinction is not academic. `abi.encode` of three *static* bytes32
+ * values happens to still be a plain three-way concatenation, so the bytes on
+ * the wire would be identical — but that equality is a property of how many
+ * fields there are and what types they are, not something to rely on silently.
+ * Writing the encode explicitly means adding a `string` or a dynamic array
+ * later cannot quietly change the preimage, and it makes this function legible
+ * next to `RecourseEscrow.evidenceRoot()`, which is the definition that counts.
+ *
+ * Field order must match the Solidity exactly. See the vector in
+ * docs/vectors/hash-vectors.json, and `test/HashesMatchSha256OfText` on the
+ * contract side which pins the same value.
  */
-export function evidenceRootHex(deliveryHash: Hex, disputeHash: Hex): Hex {
-  return keccak256(concatHex([deliveryHash, disputeHash]));
+export function evidenceRootHex(deliveryHash: Hex, disputeHash: Hex, artifactHash: Hex): Hex {
+  return keccak256(
+    encodeAbiParameters(
+      // Spelled as the parsed form rather than `parseAbiParameters('bytes32,
+      // bytes32, bytes32')`: identical to viem, and it is the shape the test
+      // stub implements, so the same call is exercised with and without the
+      // real library.
+      [{ type: 'bytes32' }, { type: 'bytes32' }, { type: 'bytes32' }],
+      [deliveryHash, disputeHash, artifactHash],
+    ),
+  );
 }
 
 /**

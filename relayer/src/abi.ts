@@ -65,6 +65,8 @@ export const purchaseComponents = [
   { name: 'promiseText', type: 'string' },
   { name: 'rubric', type: 'string[]' },
   { name: 'deliveryNotes', type: 'string' },
+  { name: 'deliveryUrl', type: 'string' },
+  { name: 'artifactHash', type: 'bytes32' },
   { name: 'disputeNotes', type: 'string' },
 ] as const;
 
@@ -156,6 +158,20 @@ export const escrowAbi = [
   {
     type: 'function',
     name: 'evidenceRoot',
+    stateMutability: 'view',
+    inputs: [{ name: 'purchaseId', type: 'uint256' }],
+    outputs: [{ name: '', type: 'bytes32' }],
+  },
+  {
+    type: 'function',
+    name: 'deliveryUrl',
+    stateMutability: 'view',
+    inputs: [{ name: 'purchaseId', type: 'uint256' }],
+    outputs: [{ name: '', type: 'string' }],
+  },
+  {
+    type: 'function',
+    name: 'artifactHash',
     stateMutability: 'view',
     inputs: [{ name: 'purchaseId', type: 'uint256' }],
     outputs: [{ name: '', type: 'bytes32' }],

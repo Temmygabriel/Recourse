@@ -36,6 +36,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -63,6 +64,28 @@ const transport = http(RPC, { retryCount: 3, timeout: 30_000 });
 const publicClient = createPublicClient({ chain: baseSepolia, transport });
 
 // ---------------------------------------------------------------------------
+// Evidence pins
+//
+// The URL and digest the seller commits to. Read from docs/evidence/pins.json
+// rather than written inline here, because the seed script and the frontend use
+// the same pins — and a commit SHA that disagrees between them is not a mistake
+// anything detects at run time. It surfaces as a digest mismatch, which the
+// judgment contract reads as a tampered artifact and answers with a full
+// refund: an honest seller punished for a copy-paste error.
+// ---------------------------------------------------------------------------
+
+interface Pin {
+  readonly url: string;
+  readonly sha256: string;
+}
+
+const PINS = JSON.parse(
+  readFileSync(resolve(HERE, '../../docs/evidence/pins.json'), 'utf8'),
+) as { readonly note: string; readonly commits: Record<string, string>; readonly artifacts: Record<string, Pin> };
+
+const EVIDENCE: Pin = PINS.artifacts['escrow_review']!;
+
+// ---------------------------------------------------------------------------
 // The lifecycle writes. The relayer's own ABI (src/abi.ts) is deliberately
 // read-only plus `settle`, because that is all a relayer does — so the buyer
 // and seller calls are declared here rather than widened into shipped code.
@@ -71,16 +94,18 @@ const publicClient = createPublicClient({ chain: baseSepolia, transport });
 const escrowWriteAbi = parseAbi([
   'function createOffer(uint96 price, uint64 deliveryDeadline, uint64 reviewWindow, string promiseText, string[] rubric) returns (uint256)',
   'function purchase(uint256 purchaseId)',
-  'function submitDelivery(uint256 purchaseId, string deliveryNotes)',
+  'function submitDelivery(uint256 purchaseId, string deliveryUrl, bytes32 artifactHash, string deliveryNotes)',
   'function openDispute(uint256 purchaseId, uint8 disputedBitmap, string disputeNotes)',
   'function disputeBond(uint96 price) view returns (uint96)',
   'function purchaseCount() view returns (uint256)',
   'function totalHeld() view returns (uint256)',
-  'function getPurchase(uint256 purchaseId) view returns ((address seller, address buyer, uint96 price, uint64 deliveryDeadline, uint64 reviewWindow, uint64 deliveredAt, uint8 criteriaCount, uint8 stage, uint96 disputeBond, uint8 disputedBitmap, string promiseText, string[] rubric, string deliveryNotes, string disputeNotes))',
+  'function getPurchase(uint256 purchaseId) view returns ((address seller, address buyer, uint96 price, uint64 deliveryDeadline, uint64 reviewWindow, uint64 deliveredAt, uint8 criteriaCount, uint8 stage, uint96 disputeBond, uint8 disputedBitmap, string promiseText, string[] rubric, string deliveryNotes, string deliveryUrl, bytes32 artifactHash, string disputeNotes))',
   'function genlayerKey(uint256 purchaseId) view returns (string)',
   'function promiseHash(uint256 purchaseId) view returns (bytes32)',
   'function rubricHash(uint256 purchaseId) view returns (bytes32)',
   'function evidenceRoot(uint256 purchaseId) view returns (bytes32)',
+  'function deliveryUrl(uint256 purchaseId) view returns (string)',
+  'function artifactHash(uint256 purchaseId) view returns (bytes32)',
 ]);
 
 const erc20Abi = parseAbi([
@@ -216,6 +241,59 @@ async function send(
   }
 }
 
+/**
+ * Fetch the evidence URL and return the sha256 of exactly what came back.
+ *
+ * NOT `sha256(readFileSync(localPath))`, and the difference is the whole point
+ * of the design. The contract's check is against the bytes the *host serves*,
+ * and a local file can differ from its published form by a line ending or a
+ * Unicode normalisation without anyone intending it. Hashing the local copy
+ * would commit the seller to a digest the URL does not serve, which the
+ * judgment contract reads as a tampered artifact and answers with a full
+ * refund — punishing an honest seller for a CRLF.
+ *
+ * Doing the fetch here also means the script fails before spending gas if the
+ * URL is dead, rather than committing a purchase to evidence that was never
+ * there.
+ */
+async function fetchArtifact(url: string): Promise<{ bytes: number; digest: Hex }> {
+  const res = await fetch(url, { redirect: 'error' });
+  if (!res.ok) {
+    throw new Error(
+      `evidence fetch got HTTP ${res.status} from ${url}. The escrow only accepts a ` +
+        `commit-pinned raw.githubusercontent.com URL, so a 404 here usually means the ` +
+        `commit in docs/evidence/pins.json is not the one that added the file.`,
+    );
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  const digest = `0x${createHash('sha256').update(buf).digest('hex')}` as Hex;
+  return { bytes: buf.length, digest };
+}
+
+/**
+ * The seller's side of the evidence commitment, checked the way the judgment
+ * contract will check it — fetch, hash, compare against the pin.
+ *
+ * `redirect: 'error'` above is load-bearing. `fetch` follows redirects by
+ * default, and a redirect would mean the URL the escrow stored is not the URL
+ * the bytes came from: the digest would be committed against content served by
+ * some other path the seller never pinned. GitHub serves raw content directly,
+ * so any redirect here is a signal that something is wrong, not a normal hop.
+ */
+async function pinArtifact(pin: Pin): Promise<Hex> {
+  const { bytes, digest } = await fetchArtifact(pin.url);
+  if (digest.toLowerCase() !== `0x${pin.sha256}`.toLowerCase()) {
+    throw new Error(
+      `the bytes at ${pin.url} hash to ${digest}, but docs/evidence/pins.json pins ` +
+        `${pin.sha256}. The file was edited after it was pinned, or the pin is wrong. ` +
+        `Do not submit this delivery — the judgment contract would read it as a tampered ` +
+        `artifact.`,
+    );
+  }
+  console.log(`  ✓ artifact ${bytes} bytes, sha256 ${digest}`);
+  return digest;
+}
+
 async function allowanceOf(owner: Address): Promise<bigint> {
   return publicClient.readContract({
     address: USDC,
@@ -262,6 +340,10 @@ async function inspect(id: bigint): Promise<void> {
   console.log(`  disputeBond     ${usdc(p.disputeBond)}`);
   console.log(`  disputedBitmap  0b${p.disputedBitmap.toString(2).padStart(p.criteriaCount, '0')}`);
   console.log(`  deliveredAt     ${p.deliveredAt === 0n ? '(not delivered)' : p.deliveredAt}`);
+  if (p.deliveryUrl !== '') {
+    console.log(`  deliveryUrl     ${p.deliveryUrl}`);
+    console.log(`  artifactHash    ${p.artifactHash}`);
+  }
 
   if (STAGE[p.stage] === 'DISPUTED') {
     const [key, promise, rubric, evidence] = await Promise.all([
@@ -275,6 +357,24 @@ async function inspect(id: bigint): Promise<void> {
     console.log(`  promiseHash     ${promise}`);
     console.log(`  rubricHash      ${rubric}`);
     console.log(`  evidenceRoot    ${evidence}`);
+
+    // The one thing the relayer cannot recompute. The root binds three values
+    // and the relayer re-derives two of them from text it just read; the third
+    // is a digest of bytes only the host has. So it is checked against the pin
+    // instead — fetched and re-hashed, the same way the judgment contract will.
+    const { digest } = await fetchArtifact(p.deliveryUrl);
+    const matches = digest.toLowerCase() === p.artifactHash.toLowerCase();
+    console.log(
+      `\n  artifact at that URL hashes to ${digest}\n` +
+        `  the escrow committed           ${p.artifactHash}\n` +
+        `  ${matches ? '✓ they agree' : '✗ THEY DISAGREE — the judgment contract would refund in full'}`,
+    );
+    if (!matches) {
+      throw new Error(
+        `the artifact at ${p.deliveryUrl} no longer hashes to what the seller committed. ` +
+          `That is a full refund by rule, with no model involved — not a relayer bug.`,
+      );
+    }
   }
 }
 
@@ -381,7 +481,7 @@ async function createOffer(seller: Wallet): Promise<bigint> {
   const rubric = [
     'The review names every finding it reports and gives each one a severity rating.',
     'Every finding includes a concrete reproduction step or a specific code reference.',
-    'The review is delivered as a single PDF document.',
+    'The review is delivered as a single Markdown document.',
   ];
   console.log(`  price           ${usdc(price)}`);
   console.log(`  reviewWindow    ${reviewWindow}s`);
@@ -409,10 +509,16 @@ async function purchase(buyer: Wallet, id: bigint): Promise<void> {
 
 async function deliver(seller: Wallet, id: bigint): Promise<void> {
   hr('3. submitDelivery  (seller)');
+  console.log(`  url             ${EVIDENCE.url}`);
+  const digest = await pinArtifact(EVIDENCE);
   await send(seller, ESCROW, escrowWriteAbi, 'submitDelivery', [
     id,
-    'Delivered recourse-review.pdf (7 pages, 4 findings: 1 high, 2 medium, 1 low). ' +
-      'The reproduction notes are inline under each finding.',
+    EVIDENCE.url,
+    digest,
+    'Delivered escrow-review.md — four findings against RecourseEscrow.sol, each with a ' +
+      'code reference. Findings 1-3 carry a severity rating and a reproduction step; ' +
+      'finding 4 is recorded without a rating because I could not decide whether the ' +
+      'behaviour it describes is a defect.',
   ]);
 }
 
@@ -427,14 +533,17 @@ async function dispute(buyer: Wallet, id: bigint): Promise<void> {
   });
   console.log(`  bond            ${usdc(bond)}`);
   await approveIfNeeded(buyer, bond, 'bond');
-  // Criterion index 2 (the third) is the one disputed — "delivered as a single
-  // PDF". Bit 2 set => 0b100. The order matters: it is the same order as the
-  // rubric array above, and the same order the verdict's bitmap will use.
+  // Criterion index 0 (the first) is the one disputed — "every finding carries a
+  // severity rating". Bit 0 set => 0b001. The index is into the rubric array
+  // above, which was frozen into the escrow at createOffer: the buyer is naming
+  // a criterion that existed before the delivery did, not one written to fit it.
   await send(buyer, ESCROW, escrowWriteAbi, 'openDispute', [
     id,
-    0b100,
-    'No PDF was attached to the delivery. The notes describe a PDF but the ' +
-      'deliverable itself was never provided in that format.',
+    0b001,
+    'Criterion 1 was not met. Findings 1, 2 and 3 carry a severity rating; finding 4 ' +
+      'does not. The review says so itself in the finding 4 entry, so this is not a ' +
+      'question of interpretation — one of the four findings has no rating, and the ' +
+      'criterion requires a rating on every finding. Criteria 2 and 3 were met.',
   ]);
 }
 

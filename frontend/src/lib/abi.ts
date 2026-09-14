@@ -49,6 +49,8 @@ const purchaseComponents = [
   { name: 'promiseText', type: 'string' },
   { name: 'rubric', type: 'string[]' },
   { name: 'deliveryNotes', type: 'string' },
+  { name: 'deliveryUrl', type: 'string' },
+  { name: 'artifactHash', type: 'bytes32' },
   { name: 'disputeNotes', type: 'string' },
 ] as const;
 
@@ -159,6 +161,8 @@ export const escrowAbi = [
     stateMutability: 'nonpayable',
     inputs: [
       { name: 'purchaseId', type: 'uint256' },
+      { name: 'deliveryUrl', type: 'string' },
+      { name: 'artifactHash', type: 'bytes32' },
       { name: 'deliveryNotes', type: 'string' },
     ],
     outputs: [],
@@ -336,5 +340,9 @@ export interface Purchase {
   promiseText: string;
   rubric: readonly string[];
   deliveryNotes: string;
+  /** Where the delivered artifact lives. Empty until delivered. */
+  deliveryUrl: string;
+  /** sha256 of the bytes at `deliveryUrl`. Zero until delivered. */
+  artifactHash: `0x${string}`;
   disputeNotes: string;
 }

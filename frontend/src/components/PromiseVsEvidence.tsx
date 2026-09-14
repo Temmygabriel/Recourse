@@ -24,10 +24,19 @@
  *      dispute text, so splitting them per criterion would mean inventing a
  *      split that does not exist. They are shown once each, verbatim, with the
  *      disputed criteria marked on the list above them.
+ *
+ *   4. THE WORK ITSELF IS SHOWN, NOT JUST THE DESCRIPTION OF IT. The delivery
+ *      text is the seller's account; the pinned file is what they actually
+ *      handed over. Both are on this screen, and the file carries its
+ *      fingerprint so that "this is the work" is a claim the reader can test
+ *      rather than one they have to accept. A comparison of a promise against
+ *      prose, with the artifact left off the page, would be a screen for
+ *      judging writing.
  */
 
 import Link from 'next/link';
 
+import { ArtifactRef } from './ArtifactRef';
 import { DocBody, DocCard, DocHead, Verbatim } from './Document';
 import { RequirementList, type RequirementMark } from './RequirementList';
 import type { Purchase } from '@/lib/abi';
@@ -110,6 +119,19 @@ export function PromiseVsEvidence({
                     </span>
                   </div>
                   <div className="exhibit-body">{purchase.deliveryNotes}</div>
+                </div>
+              )}
+
+              {/*
+                The artifact itself: the seller's account of the delivery above,
+                and the file they handed over below it. That order is the order
+                the story is told in, and the adjacency is the point — a reader
+                who has just read a claim can check it against the file without
+                leaving the column.
+              */}
+              {purchase.deliveryUrl !== '' && (
+                <div className="mt-4">
+                  <ArtifactRef url={purchase.deliveryUrl} hash={purchase.artifactHash} />
                 </div>
               )}
             </div>

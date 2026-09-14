@@ -3,7 +3,7 @@
 Work log, newest first. For durable decisions and constraints see
 [MEMORY.md](./MEMORY.md).
 
-**Deadline: Sept 17, 2026** (submission). Today: Sept 13, 2026.
+**Deadline: Sept 17, 2026** (submission). Today: Sept 14, 2026.
 
 ---
 
@@ -13,25 +13,26 @@ Work log, newest first. For durable decisions and constraints see
 |:--|:--|
 | Repo scaffold | 🟢 done |
 | Base escrow contract | 🟢 **compiles — `forge build` exits 0, solc 0.8.24** |
-| Escrow tests | 🟢 **122/122 passing locally** (was 112 before the reconciliation tests) |
-| GenLayer judgment contract | 🟢 **migrated to the v0.3.0 SDK surface — this was the schema error** |
-| Judgment logic tests | 🟢 **passing locally** (11/11, re-run after the migration) |
-| Cross-language hash vectors | 🟢 done and locked from both sides |
-| Relayer | 🟢 written; **30/30 pure-logic tests passing locally**; SDK surface verified against the published package |
+| Escrow tests | 🟢 **139/139 passing locally** (was 122; +17 for the delivery-URL and artifact-hash paths) |
+| GenLayer judgment contract | 🟢 **migrated to the v0.3.0 SDK surface — this was the schema error**; now fetches the artifact |
+| Judgment logic tests | 🟢 **28/28 passing locally** (was 11; +17 for fetch, digest, truncation and outage paths) |
+| Cross-language hash vectors | 🟢 done and locked from both sides — **unaffected by this rebuild**: the vectors cover `promiseHash`/`rubricHash`, and the generator has no `evidenceRoot` |
+| Relayer | 🟢 written; **40/40 pure-logic tests passing locally** (was 30) |
 | Frontend (8 pages) | 🟢 **8 pages typecheck clean (`tsc --noEmit` exit 0) AND build (`next build` exit 0)** — verified locally 2026-09-11 |
 | Frontend — stale reads after a write | 🟢 **handled since Session 14** — every write names what it made true and waits for the chain to agree before the page acts on it |
 | Frontend — wallet connect (Brave / multi-wallet) | 🟡 **rewritten in Session 14** (EIP-6963 discovery, picker, deferred network switch); typechecks and builds, **but has not been exercised against a real wallet** — see Session 14 for what to check |
 | CI (GitHub Actions) | 🟢 **all 5 jobs green on GitHub's runners** — Foundry toolchain pinned to `v1.8.1` since Session 15 (it was `stable`, and one run died on a 500 fetching the tarball) |
-| End-to-end loop | 🟢 **CLOSED — a real dispute settled on Base Sepolia with real USDC; `settle()` mined, verdict carried back from studio-dev** |
-| Demo content on chain | 🟢 **7 purchases, one in every stage**, seeded 2026-09-12 and verified by reading each rubric back off the chain — but **purchase #2 carries a corrupted rubric** from the deleted shell seeder, see Session 15 |
+| End-to-end loop | 🟡 **WAS closed on the old struct** — a real dispute settled on Base Sepolia with real USDC. The delivery-URL rebuild changes `Purchase` and `evidenceRoot`, so that run no longer describes this code. Re-running it is task #20 |
+| Demo content on chain | 🟡 **needs reseeding.** The old 7 purchases do not carry over — `getPurchase` gained two fields, and purchases #1–7 were delivered without a URL or artifact hash |
 | Verdict presentation | 🟢 **stamp landing + count-up added Session 16** — and it turned up a live bug: Tailwind was dropping every `stamp-*` / `status-*` tone class, so a RELEASE and a FULL REFUND rendered identically. Fixed with a safelist; verified with an isolated 3.4.17 build |
+| Evidence artifacts | 🟢 **4 artifacts written and one deliberate fault planted** — `docs/evidence/`, hosted in this repo as commit-pinned raw URLs. Pins go in `docs/evidence/pins.json` (see Session 18 for the two-commit dance that makes them non-circular) |
 | Hand-testing guide | 🟢 **`docs/TESTING.md` written — local only, gitignored, deliberately not in the repo** (it names the `.secrets/` key files and the exact values to type). Step-by-step, end to end, with a "what broken looks like" table and an honest section on what the system cannot prove |
 | README / security narrative | 🟢 README, `docs/SECURITY.md`, `docs/DEPLOY.md` all written — every cross-link resolves |
 | docs/MONEY_RAILS_AUDIT.md | 🟢 written — Issues 1–2 clean, Issue 3's gap closed by `totalHeld()`, Issue 4 still flagged unmeasured |
 | GitHub push wired up | 🟢 working — **including `.github/workflows/`**; the `workflow` scope is granted (re-verified 2026-09-12) |
-| GenLayer deploy (studio-dev 61997) | 🟢 **DEPLOYED — `0x0f385a4e7400a0693776D19102e0be75D334ce1c`, FINALIZED · MAJORITY_AGREE, 5/5 validators; schema loads** |
-| Base escrow deploy | 🟢 **DEPLOYED — `0x32288128Ff07Fc9e443161c1F336b784508a056A`; all seven immutables verified on-chain** |
-| Vercel deploy | 🟢 **READY — precondition met; one required env var, value known** |
+| GenLayer deploy (studio-dev 61997) | 🟡 **deployed, but stale** — `0x0f385a4e7400a0693776D19102e0be75D334ce1c`, FINALIZED · MAJORITY_AGREE, 5/5 validators. It does not fetch; the new revision must be redeployed to the same network (61997, **not** 61999) |
+| Base escrow deploy | 🟡 **deployed, but stale** — `0x32288128Ff07Fc9e443161c1F336b784508a056A`. `Purchase` gained two fields, so this build cannot accept a delivery from the new frontend. Redeploy with the new judgment address |
+| Vercel deploy | 🟡 **was READY** — still deployable, but `NEXT_PUBLIC_ESCROW_ADDRESS` must be repointed at the new escrow once it exists |
 
 Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 
@@ -93,6 +94,250 @@ Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 > was blocked by two fixable things in our own code — a v0.2.x SDK surface and a
 > default fee distribution. Full retraction in Session 11 and in
 > [`genlayer-studio-dev-deploy-issues.md`](./genlayer-studio-dev-deploy-issues.md).
+
+---
+
+## 2026-09-14 — Session 18 — the rebuild, executed. One Session 17 decision reversed.
+
+Session 17 decided *what* to build and stopped. This session built it, and on one
+point decided against Session 17. That reversal is the first item here because
+the entry above still states the old decision as settled.
+
+### Reversal: the seller commits the hash by **fetching the URL**, not by picking a local file
+
+Session 17, decision 2: *"the seller commits the hash by picking the file in the
+browser — hashed locally with Web Crypto, never uploaded."* **That is wrong and
+it has been replaced.** The frontend now fetches the URL the seller pastes and
+hashes exactly the bytes that come back.
+
+The reason is a failure mode that costs an honest seller their entire fee. The
+contract's check is against the bytes the **host serves**. A local file can
+differ from its published form without anyone intending it — a CRLF checkout on
+Windows (this repo is developed on Windows, with `core.autocrlf=true`), an editor
+that normalises Unicode, a `.gitattributes` filter. Hash the local copy and the
+seller commits to a digest the URL does not serve; the judgment contract reads
+that as a tampered artifact and answers with a **deterministic full refund**,
+with no model call and no appeal. The seller did the work, delivered it, and
+loses the money to a line-ending.
+
+Fetching removes the question rather than documenting it: there is only ever one
+set of bytes under discussion, and the seller sees the digest before signing.
+`frontend/src/lib/evidence.ts` carries this reasoning at the top, because the
+cheaper design is the one the next person will reach for.
+
+Related, and also changed: Session 17 says the demo uses *"a GitHub gist raw
+URL"*. Gists have no commit-pinned raw form that survives editing, so the
+evidence now lives **in this repo** at commit-pinned `raw.githubusercontent.com`
+URLs — the same host, and the evidence sits with the code that judges it. No
+second repository was created.
+
+### The bug this walked into: `evidenceRoot` was hashed over two fields, not three
+
+Found while updating the relayer for the new `Purchase` shape.
+`relayer/src/hashes.ts` computed
+
+```
+keccak256(abi.encode(deliveryHash, disputeHash))          // wrong
+keccak256(abi.encode(deliveryHash, disputeHash, artifactHash))   // contract
+```
+
+**This was a silent wrong-answer bug, and it was the worst kind.** Nothing about
+it fails at build time or at test time on either side — there is simply a
+disagreement between two implementations of a hash in two languages, which is
+precisely the failure `docs/DATA_MODEL.md` and the CI vectors job exist to
+prevent, and the vectors did not cover `evidenceRoot`. Its only symptom would
+have been `settle()` reverting with "evidence mismatch" **after the GenLayer fee
+was already spent** — real money, on the demo's happy path, with an error message
+pointing at the contract rather than at the relayer.
+
+`relayer/test/pure.test.ts` now pins the three-field root, includes a regression
+guard named for the bug (`evidenceRoot is not the old two-field root`), and
+checks that all three field orders differ — so a future reordering cannot pass by
+accident either.
+
+### The evidence artifacts, and the fault planted in one of them
+
+Four artifacts in `docs/evidence/`, each written to be genuinely adjudicable:
+
+| Artifact | Deliverable | Expected verdict |
+|:--|:--|:--|
+| `brand-kit.md` | clean delivery, criteria met | release |
+| `escrow-review.md` | a real review of `RecourseEscrow.sol`, four findings | **dispute — finding 4 has no severity rating** |
+| `accessibility-report.md` | 12 WCAG findings, two of which name a *component* where the rubric asks for an *element* | partial refund |
+| `backup-setup.md` | a nightly job, and a restore drill that ran against a copy on the same host | partial refund |
+
+The escrow review is the demo dispute. **The fault is deliberate and the artifact
+admits it**: finding 4 is the only finding without a severity rating, and the
+rubric asks for one per finding. The delivery notes do not mention the gap. So
+the case turns on something a reader can verify from the file alone — which is
+the whole point of fetching the artifact, and would have been unadjudicable from
+prose.
+
+**The binary-artifact problem, found while writing these.** The judgment
+contract rejects a non-text artifact as a fault. Two planned demo deliverables
+described binaries — slot 7's "single archive" and `e2e-live.ts`'s "single PDF".
+Both would have been a **guaranteed full refund for a seller who did everything
+right**, decided deterministically, with no model call. Both rubric wordings and
+both deliverables were reworked to Markdown. Legitimate only because we are
+redeploying anyway.
+
+Two genuine findings about our own escrow, recorded rather than fixed, and both
+in `escrow-review.md`: `disputeBond()` truncates to **0** below a price of 20
+(`price * 500 / 10_000`), and **DISPUTED has no timeout exit** — a persistent 5xx
+from the evidence host strands the funds, since the buy-side escape hatches are
+all on the DELIVERED stage.
+
+### Pinning the evidence without a circular dependency
+
+A pin is a URL containing a commit SHA, and the file it names cannot contain its
+own SHA. Resolved by making the pin point at the **previous** commit:
+
+1. Commit and push the evidence files. Read back the SHA.
+2. Fetch each artifact from `raw.githubusercontent.com` at that SHA and compute
+   sha256 of the bytes **as served** — not of the local file.
+3. Write `docs/evidence/pins.json` naming that SHA, and commit it in a second
+   commit.
+
+The pin stays valid forever, because a git object named by SHA never changes.
+The digest is the trust anchor; the URL is only where the bytes were found.
+
+Step 2 fetches rather than hashing the working tree on purpose. `.gitattributes`
+sets `* text=auto eol=lf` and the artifacts are already LF, so the two should
+agree — but "should agree" is the assumption this entire design is built to stop
+relying on, and it costs one `curl` to check.
+
+### Verified before designing around it
+
+`raw.githubusercontent.com` returns `Access-Control-Allow-Origin: *` on **both
+200 and 404**. This was checked against the live host with an `Origin` header
+before the frontend was written, because without it the whole browser-side
+fetch-and-hash design would need a server-side proxy. It also sets
+`Cache-Control: max-age=300`, which is why the seller is told not to edit the
+file after submitting rather than being promised instant detection.
+
+### Frontend
+
+- `lib/evidence.ts` — the URL rule (a fourth copy, deliberate: the seller is told
+  a link is unusable *before* signing rather than by a reverting transaction),
+  `fetchArtifact` with `redirect: 'error'` and `cache: 'no-store'`, and the
+  size advice. The three-way failure split mirrors the judgment contract's:
+  a wrong link is the seller's to fix, a down host is nobody's fault.
+- `offers/[id]/deliver` — rewritten. The old page's header comment claimed *"no
+  URL field, deliberately"*, which was true of the old design and is now false.
+  The fingerprint is stored **with the URL it was fetched from** and used only
+  while those two still agree, so there is no state in which a seller can edit
+  the link and submit the previous link's digest.
+- `components/ArtifactRef.tsx` — the delivered file, its fingerprint, and a
+  button that re-fetches it in the reader's own browser and checks the two. This
+  is the one hash in the app a reader can actually recompute, so it would be
+  perverse to leave it behind a command line. Shown on the offer, dispute, case
+  and verdict pages.
+
+### Not proven yet — read this before trusting the table above
+
+- **Neither contract is redeployed.** The new `RecourseJudgment` and the new
+  `RecourseEscrow` exist only on this machine. Everything the frontend now does
+  is against an escrow that cannot accept it.
+- **The end-to-end loop has not been re-run.** The 2026-09-12 run was against the
+  old struct.
+- **The frontend has not been typechecked or built since these edits.** There is
+  no `node_modules` on this machine and the user's constraint is that heavy
+  compute runs on GitHub — so the CI `frontend` job is the first real check, and
+  it runs on push. A green local Foundry suite says nothing about the TypeScript.
+
+Three local suites are green and were run this session: **139 contract tests, 40
+relayer pure-logic tests, 28 judgment logic tests.**
+
+### Next
+
+1. Push, then write and commit `docs/evidence/pins.json` from the served bytes.
+2. Redeploy `RecourseJudgment` to **studio-dev 61997** and `RecourseEscrow` to
+   Base Sepolia against its address; re-seed.
+3. Re-run the loop including the tamper case: deliver, then edit the artifact and
+   watch the deterministic full refund.
+4. The docs pass — including the backwards `UNDETERMINED` claim Session 17 found.
+5. The submission note, per `MEMORY.md` D24 — **last**, after the testing.
+
+---
+
+## 2026-09-13 — Session 17 — the delivery problem, and the rebuild it forces
+
+### The challenge, and why the user was right
+
+The user read the finished product and asked the question none of our docs
+answered: *how does the seller actually deliver, how does the buyer receive it,
+and how does GenLayer know a delivery claim isn't fabricated?* Then: *anyone can
+lie, no one gets justice at machine speed, so what is the project for?*
+
+**All of it was correct, and it indicted the design rather than the
+documentation.** Two findings:
+
+1. **We built around GenLayer's defining capability instead of using it.**
+   GenLayer's Intelligent Contracts fetch the web natively. Our judgment
+   contract reads four plaintext strings and never fetches anything. A seller
+   who writes a convincing, entirely invented delivery is indistinguishable
+   from one who did the work — because the only thing the model ever sees is
+   the seller's *description* of the work.
+2. **The build spec always intended a URL.** `docs/specs/build_spec.md` §2 lists
+   the MVP as *"Seller submits delivery: **a URL/hash** plus short evidence
+   notes"*, and §4.3 requires hashing *the evidence content* and freezing the
+   artifact. The implementation kept the notes and dropped the URL. This
+   rebuild is **returning to the agreed spec**, not departing from it.
+
+The excuse we had used — §4.3's warning that a live URL can serve different
+bytes to different validators — is a solved problem in GenLayer, not a reason to
+avoid URLs. The docs name it *"the #1 cause of failed consensus for new
+developers"* and prescribe the fix: fetch, extract stable fields, compare those.
+
+### Nearly walked into the known trap again
+
+The public docs at `docs.genlayer.com` describe the **v0.2.x** surface.
+`MEMORY.md` warns about this explicitly and says studio-dev serves **v0.3.0**,
+and that the truth lives at `sdk.genlayer.com/main/executors/v0.3/`. The first
+draft of this answer quoted `gl.nondet.web.get` **from the stale pages** without
+checking which surface they described. Caught before acting on it.
+
+**Verified against the v0.3.0 reference** (the surface studio-dev actually runs):
+
+| What | v0.3.0 truth |
+|:--|:--|
+| Web access | `genlayer.nondet.web` — `get()`, `post()`, `render()`, `request()`, `head()`, `delete()`, `patch()` |
+| Response | `Response(status: int, headers: dict[str, bytes], body: bytes \| None)` |
+| Consensus | `gl.eq_principle.strict_eq()` — unchanged in usage |
+| Nondet | `gl.vm.run_nondet` is the **unsafe** variant (what we already use, deliberately) |
+| Errors | `gl.nondet` raises `gl.nondet.NondetException`, not a bare exception |
+
+So fetch-and-verify is available on the exact network this project must use.
+
+### The rebuild
+
+Three scope decisions, all taken by the user:
+
+1. **URL + hash pinning** (not full typed criteria). The judge fetches the real
+   artifact, verifies it against a committed content hash, and reads the actual
+   text against the rubric. The rubric stays free text.
+2. **The seller commits the hash by picking the file in the browser** — hashed
+   locally with Web Crypto, never uploaded. They publish it themselves.
+3. **On a hash mismatch, a deterministic FULL REFUND** — plain contract code,
+   no model call. That is the machine-speed case.
+
+**IPFS is rejected outright** (user, mid-session: *"ipfs won't work it would be a
+real nightmare"*). No pinning, no gateways, no `ipfs://` resolution inside a
+validator. **Plain HTTPS only**; the demo uses a GitHub gist raw URL.
+
+What this changes: `Purchase` gains `deliveryUrl` + `artifactHash`,
+`submitDelivery` takes them, `evidenceRoot` binds the artifact, the judgment
+contract fetches and checks, and **both contracts must be redeployed** — the
+struct changes, so purchases #1–7 do not carry over. The seeder re-creates them.
+
+### Also found
+
+**`docs/TESTING.md` states the UNDETERMINED payout backwards.** It says the
+buyer's money comes back and the bond returns to the buyer. `_payout` in
+`RecourseEscrow.sol` does the opposite: `refundBps = 0` for UNDETERMINED, so the
+**seller keeps the price** and only the **bond** returns to the buyer. The
+judgment contract's own docstring has it right; the guide does not. Fixing in
+the docs pass.
 
 ---
 

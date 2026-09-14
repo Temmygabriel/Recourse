@@ -11,11 +11,22 @@ import {IERC20} from "./interfaces/IERC20.sol";
  * @dev Design rules this contract exists to enforce. Read them before changing
  *      anything here.
  *
- *      1. THE CONTRACT OWNS THE HASHES. Every commitment is derived here, from
- *         the text, at the moment the text is written. Callers never supply a
- *         hash. A caller that supplies both text and hash can desync the two;
- *         a contract that derives one from the other cannot. This is why the
- *         frontend contains no hashing code at all.
+ *      1. THE CONTRACT OWNS THE HASHES. Every commitment over text this contract
+ *         stores is derived here, at the moment the text is written. Callers
+ *         never supply a hash for something this contract holds: a caller that
+ *         supplies both text and hash can desync the two, and a contract that
+ *         derives one from the other cannot.
+ *
+ *         THERE IS ONE DELIBERATE EXCEPTION — `artifactHash`, set at delivery.
+ *         The delivered artifact lives on the web, not here; this contract has
+ *         never seen those bytes and cannot fetch them. So the seller supplies
+ *         that hash. It is safe for exactly one reason: nothing downstream
+ *         trusts it. The judgment layer re-hashes whatever `deliveryUrl`
+ *         actually serves and compares the two, and a mismatch is a
+ *         deterministic full refund with no model involved. A fabricated or
+ *         stale hash therefore costs the seller the sale rather than winning
+ *         it — which is the property that makes accepting a caller-supplied
+ *         commitment acceptable here and nowhere else in this file.
  *
  *      2. ONE SETTLEMENT, EVER. `SettlementDecision.nonce` is consumed
  *         atomically with payout, and the purchase carries its own
@@ -81,6 +92,26 @@ contract RecourseEscrow {
         string promiseText;
         string[] rubric;
         string deliveryNotes;
+        /// @dev Where the delivered artifact actually lives. https only, and the
+        ///      judgment layer fetches it. This is the field that lets a verdict
+        ///      be about the work rather than about a description of the work —
+        ///      without it, a seller who invents a convincing account of a
+        ///      delivery they never made is indistinguishable from one who did
+        ///      the work, because the only thing the model ever saw was prose.
+        string deliveryUrl;
+        /// @dev sha256 of the exact bytes published at `deliveryUrl`, committed
+        ///      by the seller at delivery time. If the bytes at that URL ever
+        ///      stop hashing to this, the artifact the buyer paid for is gone,
+        ///      and the judgment contract refunds in full with no model call.
+        ///
+        ///      This is the ONE commitment a caller supplies rather than the
+        ///      contract deriving, and it is a deliberate exception to design
+        ///      rule 1 at the top of this file: the contract has never seen
+        ///      those bytes and cannot fetch them. It is safe because nothing
+        ///      trusts this value — the judgment layer re-hashes what the URL
+        ///      actually serves and compares, and `settle()` binds the verdict
+        ///      to it through `evidenceRoot`.
+        bytes32 artifactHash;
         string disputeNotes;
     }
 
@@ -134,6 +165,17 @@ contract RecourseEscrow {
 
     uint64 public constant MIN_REVIEW_WINDOW = 1 hours;
     uint64 public constant MAX_REVIEW_WINDOW = 30 days;
+
+    /// @dev The one host an evidence URL may point at. See `_validateEvidenceUrl`
+    ///      for why a single host is not the compromise it looks like.
+    string private constant EVIDENCE_HOST_PREFIX = "https://raw.githubusercontent.com/";
+
+    /// @dev Commit-pinned raw URLs are short — owner, repo, forty hex characters,
+    ///      then a path. 500 is generous headroom for a deep path and still cheap
+    ///      to store. There is no query string to accommodate here: query
+    ///      strings are rejected outright, because a URL that carries one can
+    ///      serve different bytes on different fetches.
+    uint256 public constant MAX_URL_LEN = 500;
 
     uint16 public constant MIN_BOND_BPS = 100; // 1%
     uint16 public constant MAX_BOND_BPS = 2_000; // 20%
@@ -191,7 +233,12 @@ contract RecourseEscrow {
     );
     event OfferCancelled(uint256 indexed purchaseId);
     event Purchased(uint256 indexed purchaseId, address indexed buyer, uint96 price);
-    event DeliverySubmitted(uint256 indexed purchaseId, bytes32 deliveryHash, bool late);
+    event DeliverySubmitted(
+        uint256 indexed purchaseId,
+        bytes32 deliveryHash,
+        bytes32 artifactHash,
+        bool late
+    );
     event DisputeOpened(
         uint256 indexed purchaseId,
         address indexed buyer,
@@ -392,23 +439,55 @@ contract RecourseEscrow {
     // ---------------------------------------------------------------------
 
     /**
-     * @notice Submit delivery before the deadline. Notes are hashed here.
-     * @dev Late delivery reverts. The buyer's remedy is `claimDeadlineRefund`
+     * @notice Submit delivery before the deadline: where the work is, what it
+     *         hashes to, and notes explaining it against the rubric.
+     *
+     * @dev The URL is fetched by the judgment contract, which is what makes a
+     *      verdict about the artifact rather than about the seller's account of
+     *      it. `artifactHash` is sha256 over the exact bytes published at that
+     *      URL, and the browser computes it by fetching the URL and hashing what
+     *      comes back — never by hashing a file on the seller's disk. Those two
+     *      differ more often than anyone expects (CRLF against LF is the usual
+     *      culprit), and the one that matters is the one the validators will
+     *      fetch.
+     *
+     *      The URL is constrained to a commit-pinned `raw.githubusercontent.com`
+     *      path. That is stricter than "any https URL" for a reason worth stating
+     *      plainly: a hash pin only freezes *content*, and it only does that if
+     *      every fetcher sees the same bytes. A branch or tag URL (`.../main/...`)
+     *      is mutable — a force-push rewrites what it serves. A URL carrying a
+     *      query string can serve different bytes to different callers. Either
+     *      one lets two validators fetch two different artifacts and then
+     *      disagree about a hash neither of them got wrong. Pinning to a full
+     *      commit SHA removes the whole class: that URL serves one byte string,
+     *      forever, to everyone.
+     *
+     *      Late delivery reverts. The buyer's remedy is `claimDeadlineRefund`
      *      — no dispute, no bond, full refund. A seller who cannot deliver on
      *      time loses the sale rather than arguing about quality.
      */
-    function submitDelivery(uint256 purchaseId, string calldata deliveryNotes) external {
+    function submitDelivery(
+        uint256 purchaseId,
+        string calldata deliveryUrl_,
+        bytes32 artifactHash_,
+        string calldata deliveryNotes
+    ) external {
         Purchase storage p = _purchases[purchaseId];
         require(p.stage == Stage.FUNDED, "not funded");
         require(msg.sender == p.seller, "not seller");
         require(block.timestamp <= p.deliveryDeadline, "delivery late");
+        _checkText(deliveryUrl_, MAX_URL_LEN, "deliveryUrl");
         _checkText(deliveryNotes, 2000, "deliveryNotes");
+        _validateEvidenceUrl(deliveryUrl_);
+        require(artifactHash_ != bytes32(0), "artifactHash=0");
 
+        p.deliveryUrl = deliveryUrl_;
+        p.artifactHash = artifactHash_;
         p.deliveryNotes = deliveryNotes;
         p.deliveredAt = uint64(block.timestamp);
         p.stage = Stage.DELIVERED;
 
-        emit DeliverySubmitted(purchaseId, deliveryHash(purchaseId), false);
+        emit DeliverySubmitted(purchaseId, deliveryHash(purchaseId), artifactHash_, false);
     }
 
     // ---------------------------------------------------------------------
@@ -697,14 +776,43 @@ contract RecourseEscrow {
         return sha256(bytes(_purchases[purchaseId].deliveryNotes));
     }
 
+    /// @notice The URL the seller delivered at. Fetched by the judgment layer,
+    ///         and readable by the buyer so they can verify the same bytes the
+    ///         court will read.
+    function deliveryUrl(uint256 purchaseId) external view returns (string memory) {
+        return _purchases[purchaseId].deliveryUrl;
+    }
+
+    /// @notice sha256 the seller committed for the artifact at `deliveryUrl`.
+    /// @dev The buyer's check is: fetch the URL, sha256 the bytes, compare to
+    ///      this. A mismatch is provable to anyone, needs no model, and is what
+    ///      turns "trust the seller's prose" into "the seller is bound to
+    ///      specific bytes".
+    function artifactHash(uint256 purchaseId) public view returns (bytes32) {
+        return _purchases[purchaseId].artifactHash;
+    }
+
     function disputeHash(uint256 purchaseId) public view returns (bytes32) {
         return sha256(bytes(_purchases[purchaseId].disputeNotes));
     }
 
     /// @dev Recomputed from storage, never accepted as an argument. This is what
     ///      makes check #9 meaningful.
+    ///
+    ///      The artifact hash is bound in alongside the two text hashes because
+    ///      the judgment layer fetches the URL: the artifact is evidence the
+    ///      verdict is *about*, not decoration around it. If a verdict could be
+    ///      replayed against a different artifact hash it would no longer be a
+    ///      verdict on the delivery the buyer paid for.
     function evidenceRoot(uint256 purchaseId) public view returns (bytes32) {
-        return keccak256(abi.encode(deliveryHash(purchaseId), disputeHash(purchaseId)));
+        return
+            keccak256(
+                abi.encode(
+                    deliveryHash(purchaseId),
+                    disputeHash(purchaseId),
+                    artifactHash(purchaseId)
+                )
+            );
     }
 
     function disputeBond(uint96 price) public view returns (uint96) {
@@ -780,6 +888,98 @@ contract RecourseEscrow {
             }
         }
         require(!allWhitespace, string.concat(field, " blank"));
+    }
+
+    /// @dev Enforces the evidence-URL policy, in full, on-chain. This is the
+    ///      authority: the frontend and the relayer check the same rules so a
+    ///      seller fails fast instead of at the wallet, but neither of them
+    ///      decides anything. Whatever this function accepts is what the
+    ///      judgment layer will be asked to fetch.
+    ///
+    ///      The rules, and the hole each one closes:
+    ///
+    ///       1. Exactly one host. A digest says *what* must be there; the URL
+    ///          only says *where to look*. Given the digest, any host serving
+    ///          those bytes is equally fine and any host serving others is
+    ///          rejected — so allowing exactly one host trades availability, not
+    ///          integrity. A list of hosts (every IPFS gateway, say) cannot be
+    ///          reasoned about the same way, which is the trap this avoids.
+    ///
+    ///       2. A commit SHA, never a branch or tag. `.../main/...` is mutable:
+    ///          a force-push rewrites what it serves, so "the evidence" can
+    ///          change after the fact. A commit SHA cannot move. This is the
+    ///          single most important rule here, and it is why the forty
+    ///          characters below are checked rather than merely counted.
+    ///
+    ///       3. No query string, no fragment, no whitespace. A `?` or `#` lets
+    ///          one URL serve different bytes on different fetches — which would
+    ///          let two validators fetch two different artifacts and disagree
+    ///          over a hash neither of them computed wrongly. That is a
+    ///          consensus failure dressed up as a judgment dispute.
+    ///
+    ///      Refusing branches costs an honest seller nothing: GitHub's web
+    ///      uploader produces a commit, and the commit page shows its SHA.
+    function _validateEvidenceUrl(string calldata s) private pure {
+        bytes calldata b = bytes(s);
+        bytes memory host = bytes(EVIDENCE_HOST_PREFIX);
+
+        for (uint256 i = 0; i < b.length; i++) {
+            bytes1 c = b[i];
+            require(c != 0x3f && c != 0x23, "url: no query or fragment"); // ? #
+            require(c != 0x20 && c != 0x09 && c != 0x0a && c != 0x0d, "url: whitespace");
+        }
+
+        require(b.length > host.length, "url: not a raw.githubusercontent.com path");
+        require(_eqAt(b, 0, host), "url: not a raw.githubusercontent.com path");
+
+        // Walk the shape /<owner>/<repo>/<40-hex-commit>/<path>. The commit is
+        // validated structurally and then character by character, so a branch
+        // name cannot slip through by being forty characters long.
+        uint256 i = host.length;
+        i = _skipUrlSegment(b, i, "url: owner");
+        i = _skipUrlSegment(b, i, "url: repo");
+
+        require(i + 41 <= b.length, "url: commit");
+        for (uint256 k = 0; k < 40; k++) {
+            bytes1 c = b[i + k];
+            require(
+                (c >= 0x30 && c <= 0x39) || (c >= 0x61 && c <= 0x66),
+                "url: commit must be 40 lowercase hex"
+            );
+        }
+        require(b[i + 40] == 0x2f, "url: commit"); // '/'
+        i += 41;
+
+        require(i < b.length, "url: no path");
+    }
+
+    /// @dev Consumes one non-empty path segment up to (and including) its `/`.
+    ///      Reverting when the separator is missing is deliberate: it means a
+    ///      URL with fewer segments than the shape requires fails here rather
+    ///      than being read as a short commit.
+    function _skipUrlSegment(bytes calldata b, uint256 start, string memory field)
+        private
+        pure
+        returns (uint256)
+    {
+        uint256 i = start;
+        while (i < b.length && b[i] != 0x2f) {
+            i++;
+        }
+        require(i > start, string.concat(field, " empty"));
+        require(i < b.length, string.concat(field, " unterminated"));
+        return i + 1;
+    }
+
+    /// @dev `keccak256(b[at:at+len]) == keccak256(prefix)`. Written as an
+    ///      explicit loop over a `bytes memory` prefix so the bounds stay
+    ///      compile-time simple and the function stays cheap.
+    function _eqAt(bytes calldata b, uint256 at, bytes memory prefix) private pure returns (bool) {
+        if (at + prefix.length > b.length) return false;
+        for (uint256 i = 0; i < prefix.length; i++) {
+            if (b[at + i] != prefix[i]) return false;
+        }
+        return true;
     }
 
     function _rubricHash(string[] storage items) private view returns (bytes32) {

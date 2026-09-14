@@ -39,6 +39,7 @@ import {
   Verbatim,
 } from '@/components/Document';
 import { RequirementList } from '@/components/RequirementList';
+import { ArtifactRef } from '@/components/ArtifactRef';
 import { STAGE, type Purchase } from '@/lib/abi';
 import {
   ESCROW_EXPLAINER,
@@ -163,19 +164,31 @@ export default function OfferPage() {
             <DocCard>
               <DocHead title="What happened" />
               <DocBody className="flex flex-col gap-4">
-                {purchase.deliveryNotes !== '' && (
-                  <div className="exhibit">
-                    <div className="exhibit-head">
-                      <span className="font-medium text-[13px]">
-                        {isSeller ? 'Your delivery notes' : "The seller's delivery notes"}
-                      </span>
-                      {purchase.deliveredAt > 0n && (
-                        <span className="text-[12px] text-ink-muted">
-                          {new Date(Number(purchase.deliveredAt) * 1000).toLocaleString()}
-                        </span>
-                      )}
-                    </div>
-                    <div className="exhibit-body">{purchase.deliveryNotes}</div>
+                {(purchase.deliveryNotes !== '' || purchase.deliveryUrl !== '') && (
+                  <div className="flex flex-col gap-3">
+                    {purchase.deliveryNotes !== '' && (
+                      <div className="exhibit">
+                        <div className="exhibit-head">
+                          <span className="font-medium text-[13px]">
+                            {isSeller ? 'Your delivery notes' : "The seller's delivery notes"}
+                          </span>
+                          {purchase.deliveredAt > 0n && (
+                            <span className="text-[12px] text-ink-muted">
+                              {new Date(Number(purchase.deliveredAt) * 1000).toLocaleString()}
+                            </span>
+                          )}
+                        </div>
+                        <div className="exhibit-body">{purchase.deliveryNotes}</div>
+                      </div>
+                    )}
+
+                    {/* What was actually handed over, beside the account of it.
+                        The notes and the file are grouped because they are one
+                        submission — the file is the delivery, the notes are the
+                        seller's reading of it. */}
+                    {purchase.deliveryUrl !== '' && (
+                      <ArtifactRef url={purchase.deliveryUrl} hash={purchase.artifactHash} />
+                    )}
                   </div>
                 )}
 
