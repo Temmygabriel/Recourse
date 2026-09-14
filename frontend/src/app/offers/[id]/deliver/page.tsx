@@ -83,7 +83,7 @@ export default function DeliverPage() {
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
-  const [checkProblem, setCheckProblem] = useState<{ tone: 'error' | 'warn'; text: string } | null>(
+  const [checkProblem, setCheckProblem] = useState<{ tone: 'error' | 'neutral'; text: string } | null>(
     null,
   );
 
@@ -186,7 +186,7 @@ export default function DeliverPage() {
       if (e instanceof ArtifactGone) {
         setCheckProblem({ tone: 'error', text: e.message });
       } else if (e instanceof ArtifactUnreachable) {
-        setCheckProblem({ tone: 'warn', text: e.message });
+        setCheckProblem({ tone: 'neutral', text: e.message });
       } else {
         setCheckProblem({ tone: 'error', text: describeError(e) });
       }

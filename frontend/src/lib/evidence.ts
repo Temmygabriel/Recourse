@@ -201,8 +201,15 @@ function describe(e: unknown): string {
  * say. Deliberately separate from `fetchArtifact`: a size problem is not a
  * failure, and conflating the two would either block a submission the contract
  * would accept or stay silent about one it will refuse.
+ *
+ * `neutral` rather than a `warn` tone, because there is no `warn` tone — the
+ * house rule is that `neutral` means "true and worth reading, not a failure",
+ * which is exactly what a truncation notice is. Adding a fourth tone would mean
+ * new classes in globals.css and a second convention for the same idea.
  */
-export function sizeAdvice(a: FetchedArtifact): { tone: 'error' | 'warn'; text: string } | null {
+export function sizeAdvice(
+  a: FetchedArtifact,
+): { tone: 'error' | 'neutral'; text: string } | null {
   if (a.bytes > MAX_EVIDENCE_BYTES) {
     return {
       tone: 'error',
@@ -215,7 +222,7 @@ export function sizeAdvice(a: FetchedArtifact): { tone: 'error' | 'warn'; text: 
   }
   if (a.chars > MAX_EVIDENCE_CHARS) {
     return {
-      tone: 'warn',
+      tone: 'neutral',
       text:
         `That file is ${a.chars.toLocaleString()} characters. The court reads the first ` +
         `${MAX_EVIDENCE_CHARS.toLocaleString()} and is told the rest was cut — it will not ` +
