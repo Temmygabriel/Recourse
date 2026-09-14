@@ -1,0 +1,27 @@
+{
+  "note": "Digests of exactly the bytes raw.githubusercontent.com serves at each URL — fetched, not computed from the working tree. Every sha256 is prefixed with 0x at the point of use, never here. Do not edit an artifact after it is pinned: the URL keeps serving the old bytes, but the seed and e2e scripts fetch and re-hash on every run, so an edited file fails there loudly rather than silently committing a purchase to a digest the host does not serve.",
+  "commits": {
+    "escrow_review": "7b021484df11cb85726d4de4a4ac21f6fa010ca0",
+    "accessibility_report": "7b021484df11cb85726d4de4a4ac21f6fa010ca0",
+    "backup_setup": "7b021484df11cb85726d4de4a4ac21f6fa010ca0",
+    "brand_kit": "7b021484df11cb85726d4de4a4ac21f6fa010ca0"
+  },
+  "artifacts": {
+    "escrow_review": {
+      "url": "https://raw.githubusercontent.com/Temmygabriel/Recourse/7b021484df11cb85726d4de4a4ac21f6fa010ca0/docs/evidence/escrow-review.md",
+      "sha256": "d75784030122974363f83e579fc58245f7567f173951368af3419fa3bd6bc073"
+    },
+    "accessibility_report": {
+      "url": "https://raw.githubusercontent.com/Temmygabriel/Recourse/7b021484df11cb85726d4de4a4ac21f6fa010ca0/docs/evidence/accessibility-report.md",
+      "sha256": "2670d57ff37ca033cfe42fa4d118aa89fbe0e2861a2f3a4966f8e52dcf5d95f8"
+    },
+    "backup_setup": {
+      "url": "https://raw.githubusercontent.com/Temmygabriel/Recourse/7b021484df11cb85726d4de4a4ac21f6fa010ca0/docs/evidence/backup-setup.md",
+      "sha256": "43ae41ac9f7a7f834d792133514f2b1de489684746b00caf4866f3b2c86d24f8"
+    },
+    "brand_kit": {
+      "url": "https://raw.githubusercontent.com/Temmygabriel/Recourse/7b021484df11cb85726d4de4a4ac21f6fa010ca0/docs/evidence/brand-kit.md",
+      "sha256": "5a215d41d82af0257ae181b97a01e03958522da81f2469bc1cdb67ab1a95e896"
+    }
+  }
+}

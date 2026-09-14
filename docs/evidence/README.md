@@ -23,11 +23,16 @@ decides it, and anyone reviewing the project can read both.
 
 ## The files
 
-| File                         | Purchase | Verdict the demo expects                                        |
-| ---------------------------- | -------- | --------------------------------------------------------------- |
-| `accessibility-report.md`    | #5       | **Partial** — failures F7 and F11 name a component, not an element |
-| `backup-setup.md`            | #6       | **Partial** — the restore drill used a local copy, not a real backup |
-| `brand-kit.md`               | #7       | **Release** — a clean delivery, all three criteria met            |
+| File                         | Purchase      | Verdict the demo expects                                        |
+| ---------------------------- | ------------- | --------------------------------------------------------------- |
+| `escrow-review.md`           | e2e run       | **Full or partial refund** — finding 4 carries no severity rating, and the rubric requires one per finding |
+| `accessibility-report.md`    | #5            | **Partial** — failures F7 and F11 name a component, not an element |
+| `backup-setup.md`            | #6            | **Partial** — the restore drill used a local copy, not a real backup |
+| `brand-kit.md`               | #7            | **Release** — a clean delivery, all three criteria met            |
+
+`escrow-review.md` is the one the live end-to-end script delivers
+(`relayer/scripts/e2e-live.ts`), which is why it has no seeded purchase number.
+The other three are delivered by `relayer/scripts/seed-demo.ts`.
 
 Each was written so that the artifact says what the delivery notes say, and, in
 the two disputed cases, so that the shortfall is *visible in the artifact
