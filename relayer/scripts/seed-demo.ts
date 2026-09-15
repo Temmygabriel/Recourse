@@ -443,6 +443,27 @@ interface Slot {
    * prose.
    */
   readonly evidence?: string;
+  /**
+   * A key into `docs/evidence/pins.json` whose digest is committed **instead of**
+   * the digest of the artifact at `deliveryUrl`. That is a tampered delivery:
+   * the URL serves one file and the escrow holds the hash of another.
+   *
+   * It exists because the digest check is the load-bearing claim of the whole
+   * design — the judgment contract fetches the bytes and refuses to reason about
+   * them if they do not hash to what the seller committed to. A claim like that
+   * is worth demonstrating rather than asserting, and the only honest way to
+   * demonstrate it is to build the case that should fail and watch it fail.
+   *
+   * Deliberately expressed as *two real pins* rather than a random 32 bytes. A
+   * random digest proves only that unequal hashes are unequal; committing the
+   * digest of a different document from this same repo reproduces the mistake a
+   * careless seller would actually make — pinning the wrong file, or editing the
+   * file after committing to it.
+   *
+   * `pinArtifact` refuses this key, because it is never the artifact the URL
+   * points at. See the delivery step in `driveTo`.
+   */
+  readonly tamper?: string;
   readonly dispute?: { readonly bitmap: number; readonly notes: string };
 }
 
@@ -593,6 +614,53 @@ const SLOTS: readonly Slot[] = [
       'full palette with hex values, and the manifest of PNG exports.',
     evidence: 'brand_kit',
   },
+  {
+    // Added 2026-09-15. The tampered delivery — the one case in the demo that is
+    // supposed to fail, and the only row that shows the digest check doing work
+    // rather than being described.
+    //
+    // The URL serves `accessibility-report.md`. The escrow commits the digest of
+    // `brand-kit.md`. So the judgment contract fetches the accessibility report,
+    // hashes it, compares it against a digest that belongs to a different
+    // document, and refuses to reason about the evidence at all — FULL_REFUND,
+    // without a model call. That is the design's central claim, and this row is
+    // the demonstration of it.
+    //
+    // The delivery notes are the seller's own account, and they are deliberately
+    // fluent and plausible. Prose is exactly what a tampered delivery has, and
+    // the point of the row is that no amount of it changes the digest.
+    id: 8,
+    target: 'DISPUTED',
+    price: 1_000_000n,
+    subject: 'API reference',
+    promise:
+      'I will write the API reference for your escrow contract — every external function, ' +
+      'its arguments, its reverts and one worked example — and deliver it as a single ' +
+      'Markdown document.',
+    rubric: [
+      'Every external function is documented, including the view functions.',
+      'Each function lists the conditions under which it reverts.',
+      'The document is delivered as a single Markdown file.',
+    ],
+    delivery:
+      'Delivered api-reference.md. All external functions are covered, including the views, ' +
+      'and each entry lists its revert conditions with a worked example at the end.',
+    evidence: 'accessibility_report',
+    tamper: 'brand_kit',
+    // Bitmap 1 = 0b001 = bit index 0. The buyer disputes the first criterion,
+    // which the tampered evidence cannot be judged against — and the judgment
+    // never gets as far as reading it, because the digest check runs first and
+    // fails. The dispute text says what the buyer can actually see, which is the
+    // mismatch, rather than pretending to have an opinion about the content.
+    dispute: {
+      bitmap: 1,
+      notes:
+        'The document at the delivery URL is not an API reference. It is a brand kit, and it ' +
+        'does not match the digest the seller committed to when marking this delivered. I am ' +
+        'not disputing the quality of the work — the file that arrived is not the file that ' +
+        'was promised, and I cannot judge a criterion against it.',
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -694,7 +762,11 @@ async function project(slot: Slot, id: bigint): Promise<void> {
     console.log(`  + #${slot.id} purchase — ${usdc(slot.price)} from the buyer`);
   }
   if (RANK[slot.target] >= RANK.DELIVERED && slot.delivery !== undefined) {
-    console.log(`  + #${slot.id} submitDelivery`);
+    console.log(
+      slot.tamper === undefined
+        ? `  + #${slot.id} submitDelivery`
+        : `  + #${slot.id} submitDelivery — TAMPERED (digest of ${slot.tamper}, not of the URL)`,
+    );
   }
   if (RANK[slot.target] >= RANK.DISPUTED && slot.dispute !== undefined) {
     const bond = await publicClient.readContract({
@@ -779,12 +851,39 @@ async function driveTo(
       // Fetched before anything is broadcast, so a dead URL or a stale pin fails
       // here — with no gas spent and no purchase left half-delivered.
       const digest = await pinArtifact(slot.evidence);
-      console.log(`  + #${slot.id} submitDelivery — ${PINS.artifacts[slot.evidence]!.url}`);
+
+      // The tampered variant. The URL stays the one above; only the committed
+      // digest changes, to the digest of a different document. Both are fetched
+      // and hashed, and the two are compared here rather than assumed to differ:
+      // a "tamper" whose two digests matched would be an ordinary delivery
+      // wearing the name, and it would sail through the judgment as a pass.
+      let committed = digest;
+      if (slot.tamper !== undefined) {
+        committed = await pinArtifact(slot.tamper);
+        if (committed === digest) {
+          throw new Error(
+            `#${slot.id} is marked as a tampered delivery, but "${slot.evidence}" and ` +
+              `"${slot.tamper}" hash to the same value. Committing it would produce an ` +
+              `ordinary honest delivery labelled as tampering.`,
+          );
+        }
+        console.log(
+          `  + #${slot.id} submitDelivery — TAMPERED: the URL serves ` +
+            `${PINS.artifacts[slot.evidence]!.url},`,
+        );
+        console.log(
+          `      but the escrow will commit the digest of ${slot.tamper} ` +
+            `(${committed.slice(0, 18)}…, not ${digest.slice(0, 18)}…)`,
+        );
+      } else {
+        console.log(`  + #${slot.id} submitDelivery — ${PINS.artifacts[slot.evidence]!.url}`);
+      }
+
       if (broadcast) {
         await send(seller, ESCROW, escrowAbi, 'submitDelivery', [
           id,
           PINS.artifacts[slot.evidence]!.url,
-          digest,
+          committed,
           slot.delivery,
         ]);
         await waitForStage(id, 'DELIVERED');

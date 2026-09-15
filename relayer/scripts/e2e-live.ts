@@ -525,7 +525,7 @@ async function deliver(seller: Wallet, id: bigint): Promise<void> {
   ]);
 }
 
-async function dispute(buyer: Wallet, id: bigint): Promise<void> {
+async function dispute(buyer: Wallet, id: bigint): Promise<bigint> {
   hr('4. openDispute  (buyer)');
   const p = await readPurchase(id);
   const bond = await publicClient.readContract({
@@ -548,6 +548,10 @@ async function dispute(buyer: Wallet, id: bigint): Promise<void> {
       'question of interpretation — one of the four findings has no rating, and the ' +
       'criterion requires a rating on every finding. Criteria 2 and 3 were met.',
   ]);
+  // Returned rather than re-read, so the caller's expectation of what this step
+  // added to the escrow comes from the value this step used, not from a later
+  // read of the struct the step just wrote.
+  return bond;
 }
 
 // --- the run ---------------------------------------------------------------
@@ -557,6 +561,24 @@ async function run(): Promise<void> {
   const buyer = loadWallet('demo');
 
   await preflight();
+
+  // Snapshot the escrow's total before this run touches anything.
+  //
+  // `totalHeld()` is a GLOBAL across every purchase the escrow has ever taken,
+  // not a figure for the one case this script is driving. The reconciliation
+  // check at the end of this file originally compared it to `price + bond`
+  // outright, which was true only while the escrow held exactly one purchase —
+  // the September 12 chain, where this script was written. Against the seeded
+  // escrow that check failed on a healthy contract: it read 11.75 USDC, the
+  // seven seeded purchases plus this case's bond, and called it an accounting
+  // failure. The contract was right and the assertion was wrong, which is the
+  // worst way round for a check whose whole job is to be believed.
+  //
+  // Measuring the delta makes the assertion mean what it was always meant to
+  // mean: the money THIS run committed is the money that arrived. On a re-run
+  // that finds the purchase already disputed, the delta is zero and that is
+  // itself the check — a no-op run must not move funds.
+  const heldAtStart = await totalHeld();
 
   hr('Wallets');
   for (const w of [seller, buyer]) {
@@ -577,6 +599,12 @@ async function run(): Promise<void> {
   let stage = id === 0n ? 'NONE' : await stageOf(id);
   console.log(`\n  resuming at purchase ${id}, stage ${stage}`);
 
+  // What this run should have moved into the escrow, accumulated as each write
+  // happens rather than assumed. A run that finds the purchase already disputed
+  // writes nothing and expects a delta of zero — which is a real check, not a
+  // skipped one: re-running this script must not move funds.
+  let expectedAdded = 0n;
+
   if (id === 0n || stage === 'SETTLED' || stage === 'NONE') {
     id = await createOffer(seller);
     stage = 'OPEN';
@@ -584,6 +612,7 @@ async function run(): Promise<void> {
 
   if (stage === 'OPEN') {
     await purchase(buyer, id);
+    expectedAdded += (await readPurchase(id)).price;
     stage = 'FUNDED';
   }
   if (stage === 'FUNDED') {
@@ -591,7 +620,7 @@ async function run(): Promise<void> {
     stage = 'DELIVERED';
   }
   if (stage === 'DELIVERED') {
-    await dispute(buyer, id);
+    expectedAdded += await dispute(buyer, id);
     stage = 'DISPUTED';
   }
 
@@ -600,8 +629,17 @@ async function run(): Promise<void> {
 
   await inspect(id);
 
-  ownReconciliationCheck(await readPurchase(id));
+  ownReconciliationCheck(await readPurchase(id), await totalHeld() - heldAtStart, expectedAdded);
   console.log(`\n  Next: cd relayer && DRY_RUN=true node --env-file=.env dist/index.js`);
+}
+
+/** The escrow's own view of everything it is holding. */
+async function totalHeld(): Promise<bigint> {
+  return publicClient.readContract({
+    address: ESCROW,
+    abi: escrowWriteAbi,
+    functionName: 'totalHeld',
+  });
 }
 
 /**
@@ -613,16 +651,34 @@ async function run(): Promise<void> {
  * contract's own accounting — so a retained-value bug, or a token that takes a
  * fee on transfer, would be invisible to both and would show up here as a
  * divergence between two numbers that must never diverge.
+ *
+ * `addedByThisRun` is the increase in `totalHeld()` across this run, measured
+ * against a snapshot taken before any write, and `expectedAdded` is what the
+ * steps this run performed should have moved. They are compared instead of
+ * comparing the gross total, because the escrow now holds several purchases at
+ * once and the gross figure stopped meaning what this check assumed it meant.
+ * See the snapshot and the accumulator in `run()`.
+ *
+ * `p` is deliberately typed as `price + disputeBond` rather than read from the
+ * purchase struct: those two fields are what the escrow should have pulled, and
+ * a check that took its expectation from the same read it is testing would
+ * agree with itself no matter what.
  */
-async function ownReconciliationCheck(p: { price: bigint; disputeBond: bigint }): Promise<void> {
+async function ownReconciliationCheck(
+  p: { price: bigint; disputeBond: bigint },
+  addedByThisRun: bigint,
+  expectedAdded: bigint,
+): Promise<void> {
   const [held, escrowUsdc] = await Promise.all([
-    publicClient.readContract({ address: ESCROW, abi: escrowWriteAbi, functionName: 'totalHeld' }),
+    totalHeld(),
     publicClient.readContract({ address: USDC, abi: erc20Abi, functionName: 'balanceOf', args: [ESCROW] }),
   ]);
+  const committed = p.price + p.disputeBond;
   hr('Mid-dispute reconciliation');
-  console.log(`  expected        ${usdc(p.price + p.disputeBond)} (price + bond)`);
-  console.log(`  totalHeld()     ${usdc(held)}`);
-  console.log(`  USDC at escrow  ${usdc(escrowUsdc)}`);
+  console.log(`  held at start       ${usdc(held - addedByThisRun)}`);
+  console.log(`  added by this run   ${usdc(addedByThisRun)} (expected ${usdc(expectedAdded)})`);
+  console.log(`  totalHeld()         ${usdc(held)}`);
+  console.log(`  USDC at escrow      ${usdc(escrowUsdc)}`);
   if (held !== escrowUsdc) {
     throw new Error(
       `RECONCILIATION FAILURE: totalHeld() is ${usdc(held)} but the escrow holds ` +
@@ -630,14 +686,24 @@ async function ownReconciliationCheck(p: { price: bigint; disputeBond: bigint })
         `fee-on-transfer token. Stop — do not demo this.`,
     );
   }
-  if (held !== p.price + p.disputeBond) {
+  if (addedByThisRun !== expectedAdded) {
     throw new Error(
-      `ACCOUNTING FAILURE: the escrow holds ${usdc(held)} but this purchase ` +
-        `committed ${usdc(p.price + p.disputeBond)}. They agree with each other ` +
-        `and disagree with the case — find out why.`,
+      `ACCOUNTING FAILURE: this run moved ${usdc(addedByThisRun)} into the escrow but ` +
+        `its own steps account for ${usdc(expectedAdded)}. Both independent reads agree ` +
+        `with each other and disagree with the case — find out why.`,
     );
   }
-  console.log(`  ✓ holds exactly price + bond, and both independent reads agree`);
+  if (expectedAdded > 0n && expectedAdded < committed) {
+    // Only reachable if a future edit makes `run()` stop short of DISPUTED.
+    throw new Error(
+      `INCOMPLETE CASE: this purchase commits ${usdc(committed)} (${usdc(p.price)} price + ` +
+        `${usdc(p.disputeBond)} bond) but this run only moved ${usdc(expectedAdded)}. ` +
+        `The purchase did not reach DISPUTED with its bond posted.`,
+    );
+  }
+  console.log(
+    `  ✓ moved exactly what its steps account for, and totalHeld() reconciles with the USDC balance`,
+  );
 }
 
 // ---------------------------------------------------------------------------
