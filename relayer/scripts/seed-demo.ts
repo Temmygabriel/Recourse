@@ -37,26 +37,48 @@
  *
  * WHAT IT MAKES
  *
- *   #2  OPEN       the landing-page offer — created by the broken script, left
- *                  alone here (see "THE ONE PURCHASE IT DOES NOT TOUCH")
- *   #3  OPEN       a short blog-post offer, so the list has some variety
+ *   #1  OPEN       the landing-page offer
+ *   #2  OPEN       a second open offer, so the list has some variety
+ *   #3  OPEN       a short blog-post offer
  *   #4  FUNDED     bought, awaiting delivery
  *   #5  DELIVERED  delivered, review window still open, so accept-or-dispute
  *                  can be demonstrated live
  *   #6  DISPUTED   disputed on a named criterion; awaiting a judgment
+ *   #7  DELIVERED  a clean delivery, for the accept path
  *
- * Purchase #1 already exists and is SETTLED — it is the one that closed the loop
- * in Session 13. This script does not touch it.
+ * All seven are created by this script. A purchase that ends SETTLED is *not*
+ * made here — settling needs a signed decision from the GenLayer judgment, which
+ * this script has no way to produce. `e2e-live.ts` creates its own purchase, runs
+ * the whole loop against it, and settles it; that is the row the home page's
+ * proof card and `/verdict/<id>` are read from.
  *
- * THE ONE PURCHASE IT DOES NOT TOUCH
+ * THIS SCRIPT USED TO START AT #3
  *
- * #2's rubric is stored split at a comma. It is left as it is, deliberately.
- * `cancelOffer` sets `stage = NONE` but KEEPS `p.seller`, and `fetchAllPurchases`
- * filters on `seller !== ZERO` — so a cancelled offer still appears in the list,
- * rendered by `STAGE_INFO[STAGE.NONE]` as "Not found / No record exists for this
- * purchase." Cancelling would put a visible broken row in the demo to fix a
- * broken sentence in a row that is otherwise coherent. The rubric is wrong; the
- * offer is not.
+ * It assumed #1 (SETTLED in Session 13) and #2 (created by the broken shell
+ * script) were already on chain, and refused to run against an escrow that did
+ * not have them — loudly, which is the only reason this was a five-minute
+ * problem instead of a silent one. Both contracts were redeployed on 2026-09-14
+ * for the delivery-URL rebuild, so the chain now holds nothing and the seeder
+ * has to be able to lay down the whole demo itself. #1 and #2 are now ordinary
+ * slots.
+ *
+ * THE COMMA-SPLIT OFFER IS GONE, AND CANNOT COME BACK
+ *
+ * The old #2's rubric was stored cut in half at a comma — the surviving artifact
+ * of the `cast` bug described below. It is not reproduced here, and it could not
+ * be: this file passes a real `string[]`, which is the entire reason it exists.
+ * The old chain's #2 is unrecoverable now that its escrow is gone; the reasoning
+ * that kept it in the demo is kept below because it is still the reason a
+ * cancelled or damaged offer is readable rather than hidden.
+ *
+ * (Historical note, describing the September 12 chain, not this one.) #2's
+ * rubric was left split at a comma, deliberately, rather than cancelled.
+ * `cancelOffer` sets `stage = NONE` but KEEPS `p.seller`, and
+ * `fetchAllPurchases` filters on `seller !== ZERO` — so a cancelled offer still
+ * appears in the list, rendered by `STAGE_INFO[STAGE.NONE]` as "Not found / No
+ * record exists for this purchase." Cancelling would have put a visible broken
+ * row in the demo to fix a broken sentence in a row that was otherwise coherent.
+ * The rubric was wrong; the offer was not.
  *
  * IT IS RESUMABLE, WHICH IS THE POINT
  *
@@ -103,8 +125,12 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SECRETS = resolve(HERE, '../../.secrets');
 
 const RPC = process.env['BASE_RPC_URL'] ?? 'https://sepolia.base.org';
+// Prefer the environment (`node --env-file=.env scripts/seed-demo.ts`), which is
+// what a real run does. The fallback is the live testnet deployment as of
+// 2026-09-14 and must be updated on every redeploy — a stale one here does not
+// fail loudly, it seeds against a contract nobody is watching.
 const ESCROW = (process.env['ESCROW_ADDRESS'] ??
-  '0x32288128Ff07Fc9e443161c1F336b784508a056A') as Address;
+  '0xD67C696CcA7e65bb2287097e06619F1c6D14De1c') as Address;
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e' as Address;
 
 const transport = http(RPC, { retryCount: 3, timeout: 30_000 });
@@ -421,6 +447,43 @@ interface Slot {
 }
 
 const SLOTS: readonly Slot[] = [
+  {
+    // New on 2026-09-14. See "THIS SCRIPT USED TO START AT #3" above — this id
+    // used to be the SETTLED purchase that closed the loop in Session 13, and
+    // that purchase no longer exists anywhere, because the escrow it lived in
+    // was redeployed. The row below is an ordinary open offer, not an attempt to
+    // reproduce it: a SETTLED purchase cannot be seeded, only earned by running
+    // the judgment. `e2e-live.ts` is what earns one.
+    id: 1,
+    target: 'OPEN',
+    price: 1_200_000n,
+    subject: 'landing page',
+    promise:
+      'I will design and deliver a three-section landing page for your product — hero, ' +
+      'features, and pricing — as HTML and CSS you can drop into your existing site.',
+    rubric: [
+      'All three sections are present and rendered at desktop width.',
+      'Each section has a mobile layout as well, not just a scaled-down desktop one.',
+      'The markup is delivered as a single HTML file with its CSS included.',
+    ],
+  },
+  {
+    // The second id recovered from the old chain. Historically this was the
+    // offer the broken shell script corrupted; there is nothing to recover, so
+    // it is simply a second offer.
+    id: 2,
+    target: 'OPEN',
+    price: 1_800_000n,
+    subject: 'data migration',
+    promise:
+      'I will migrate your staging database from the legacy schema to the new one, and hand ' +
+      'over a written record of every column that moved or changed type.',
+    rubric: [
+      'Every table in the legacy schema is accounted for, either migrated or listed as dropped with a reason.',
+      'Columns that changed type are named individually, with the old and new type for each.',
+      'The migration was rehearsed against a copy of the database before it was run for real.',
+    ],
+  },
   {
     id: 3,
     target: 'OPEN',

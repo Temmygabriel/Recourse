@@ -99,12 +99,49 @@ Source: https://docs.genlayer.com/developers/consensus-v06-migration
 | Appeal rounds | Verified escalation is **5 → 11 → 23** validators. Never hardcode a smaller sequence, never assume a fixed appeal duration — read it from protocol state. |
 | Storage | Studio-dev may reset. Bradbury is the durable target only once v0.6 is promoted there. |
 
+### ✅ "Studio Next" IS studio-dev — proven, not name-matched (2026-09-15)
+
+The organisers' build-period announcement makes this a hard gate: *"Your project
+must be deployed on Studio Next to be accepted into the hackathon."* It gives
+Studio Next as **chain id 61997**, RPC `https://studio-next.genlayer.com/api`,
+explorer `explorer-studio-dev.genlayer.com`.
+
+The user had already said the two names are the same thing (D24). That is now
+verified against the network itself rather than against the naming:
+
+```
+POST https://studio-next.genlayer.com/api   {"method":"eth_chainId"}
+  → 0xf22d                                      # = 61997
+
+POST https://studio-next.genlayer.com/api   {"method":"gen_getContractCode",
+      "params":["0xCc3117ebD2877AF3C66D36B38A4712afE37073f3"]}
+  → base64 whose plaintext begins "# v0.3.0"
+```
+
+The second call is the load-bearing one: the RPC the organisers name serves our
+judgment contract's source back. So Recourse is on Studio Next, and **no
+redeploy was needed** for this requirement. The prohibition on `studionet`
+(61999) is unchanged.
+
+Two riders:
+
+- **The announcement's SDK ask does not apply here.** "Install
+  `@genlayer/transaction-kit@0.1.0-rc.2` … alongside `genlayer-js@2.0.0-rc.1`" is
+  for a frontend that talks to GenLayer directly. Recourse's frontend reads the
+  verdict from Base — the relayer is the only GenLayer client, and it is plain
+  `fetch`. Adding the kit would be exactly the boilerplate that the Portal's
+  "what have you built beyond the starter" criterion is asking us not to ship.
+- **The demo video is MANDATORY**, even though the Portal form labels the field
+  optional. That is a deliverable in its own right, not a nicety — task #23.
+
 ### Deploying to studio-dev — the two gates, both now proven
 
-**✅ RecourseJudgment is live: `0x0f385a4e7400a0693776D19102e0be75D334ce1c`**
-(tx `0x7cc0dbff…7c45`, `FINALIZED` · `MAJORITY_AGREE`, 5/5 votes revealed,
-activator `0x6760cDeC573cf38568C59872ee48B6FED41F8A4c`). Reached 2026-09-11 after
-two independent faults were fixed. Full runbook in `docs/DEPLOY.md`.
+**✅ RecourseJudgment is live: `0xCc3117ebD2877AF3C66D36B38A4712afE37073f3`**
+(tx `0xdf6cd4d4…a5b0`, `FINALIZED` · `MAJORITY_AGREE`, 5/5 votes revealed).
+Redeployed 2026-09-14 for the delivery-URL rebuild — this revision fetches the
+delivered artifact and re-checks its SHA-256. The earlier deployment
+(`0x0f385a4e…`) reached 2026-09-11 after two independent faults were fixed;
+full runbook in `docs/DEPLOY.md`.
 
 **Gate 1 — the CLI must be pointed at the right account AND the right network.**
 Three things that fail silently and separately:
@@ -320,8 +357,10 @@ starts failing on gas, that is the wallet to top up, not the deployer.
 | Thing | Address |
 |:--|:--|
 | Base Sepolia USDC | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
-| **RecourseEscrow (Base Sepolia)** | **`0x32288128Ff07Fc9e443161c1F336b784508a056A`** — deployed 2026-09-11, all seven immutables verified |
-| **GenLayer judgment contract (studio-dev 61997)** | **`0x0f385a4e7400a0693776D19102e0be75D334ce1c`** — deployed 2026-09-11, `FINALIZED` · `MAJORITY_AGREE` |
+| **RecourseEscrow (Base Sepolia)** | **`0xD67C696CcA7e65bb2287097e06619F1c6D14De1c`** — current, deployed 2026-09-14 (runtime 19,014 B), all seven immutables verified |
+| **GenLayer judgment contract (studio-dev 61997)** | **`0xCc3117ebD2877AF3C66D36B38A4712afE37073f3`** — current, deployed 2026-09-14, `FINALIZED` · `MAJORITY_AGREE` |
+| RecourseEscrow — superseded | `0x32288128Ff07Fc9e443161c1F336b784508a056A` (2026-09-11) — predates the `deliveryUrl`/`artifactHash` fields, so it cannot accept a delivery from the current frontend |
+| RecourseJudgment — superseded | `0x0f385a4e7400a0693776D19102e0be75D334ce1c` (2026-09-11) — reads four strings and never fetches |
 | GenLayer judgment contract (studionet 61999) | `0x3bb55747305282DBDbD6baC4215f4796b0Bc12C6` — **wrong chain for the submission**, kept only as evidence that studionet serves the *v0.2.x* runner |
 
 ### The two are bound together and cannot be re-paired
@@ -342,9 +381,9 @@ GenLayer contract still responds before a demo rather than assuming.
 
 | Consumer | Variable | Value |
 |:--|:--|:--|
-| Frontend (Vercel) | `NEXT_PUBLIC_ESCROW_ADDRESS` | `0x32288128Ff07Fc9e443161c1F336b784508a056A` |
-| Relayer | `ESCROW_ADDRESS` | `0x32288128Ff07Fc9e443161c1F336b784508a056A` |
-| Relayer | `GENLAYER_CONTRACT_ADDRESS` | `0x0f385a4e7400a0693776D19102e0be75D334ce1c` |
+| Frontend (Vercel) | `NEXT_PUBLIC_ESCROW_ADDRESS` | `0xD67C696CcA7e65bb2287097e06619F1c6D14De1c` |
+| Relayer | `ESCROW_ADDRESS` | `0xD67C696CcA7e65bb2287097e06619F1c6D14De1c` |
+| Relayer | `GENLAYER_CONTRACT_ADDRESS` | `0xCc3117ebD2877AF3C66D36B38A4712afE37073f3` |
 | Relayer | `GENLAYER_CHAIN` | `studioDevnet` |
 | Relayer | `RELAYER_PRIVATE_KEY_FILE` | `../.secrets/relayer.key` |
 

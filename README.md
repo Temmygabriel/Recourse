@@ -170,11 +170,12 @@ Honest about what is proven and what is not.
 
 | Component | State |
 |:--|:--|
-| Base escrow | **Deployed to Base Sepolia** at `0x32288128Ff07Fc9e443161c1F336b784508a056A`. Compiles clean; **122/122 tests pass** (`forge test`). Runtime 16,651 B — 7,925 B under the EIP-170 limit. All seven immutables verified on-chain. |
-| GenLayer judgment contract | **Deployed to studio-dev (61997)** at `0x0f385a4e7400a0693776D19102e0be75D334ce1c` — `FINALIZED` · `MAJORITY_AGREE`, 5 validators, 5 votes revealed. The schema endpoint returns all four methods. |
-| Relayer | Written; logic tested without dependencies (30 tests). **Has now run against a live GenLayer and settled a real dispute** — see below. |
+| Base escrow | **Deployed to Base Sepolia** at `0xD67C696CcA7e65bb2287097e06619F1c6D14De1c` (redeployed 2026-09-14). Compiles clean; **139/139 tests pass** (`forge test`). Runtime 19,014 B — 5,562 B under the EIP-170 limit. All seven immutables verified on-chain. |
+| GenLayer judgment contract | **Deployed to studio-dev (61997)** at `0xCc3117ebD2877AF3C66D36B38A4712afE37073f3` (redeployed 2026-09-14) — `FINALIZED` · `MAJORITY_AGREE`, 5 validators, 5 votes revealed, and a live `has_decision` call returns. This revision fetches the delivered artifact and re-checks its SHA-256 before reading it. |
+| Relayer | Written; logic tested without dependencies (40 tests). **Has now run against a live GenLayer and settled a real dispute** — see below. |
 | Frontend | Written; typechecks and builds (`next build`, 8 pages). CI builds it on every push; not yet hosted. |
-| Deployed end-to-end demo | **✅ Exercised on 2026-09-12.** A real purchase ran offer → purchase → delivery → dispute on Base Sepolia, a verdict came back from studio-dev, and `settle()` mined — moving real testnet USDC. |
+| Demo content on chain | **Reseeded 2026-09-14** — seven purchases, one in every stage, and the escrow's `totalHeld()` equals its USDC balance. |
+| Deployed end-to-end demo | **✅ Exercised on 2026-09-12** against the previous deployment. The delivery-URL rebuild changed the purchase struct, so that run no longer describes this code — **a re-run is outstanding.** |
 
 **The full loop has been run once, end to end, with money moving.** Purchase 1
 was disputed, judged, and settled:

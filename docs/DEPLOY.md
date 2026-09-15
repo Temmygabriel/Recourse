@@ -100,13 +100,32 @@ npm install -g genlayer@0.40.0-rc.3
 
 ### Then deploy — the fee setup is the part that bites
 
-**✅ Deployed 2026-09-11 on studio-dev:**
+**✅ Deployed 2026-09-14 on studio-dev — the current one:**
+
+```
+RecourseJudgment   0xCc3117ebD2877AF3C66D36B38A4712afE37073f3
+tx                 0xdf6cd4d43233e9a017c129abc3d9e3d372dd13008bb79be0dbed3d56507aa5b0
+result             FINALIZED · MAJORITY_AGREE  (5 committed, 5 revealed)
+probe              genlayer call <addr> has_decision '["probe-key"]'  →  false
+```
+
+This revision fetches the delivered artifact and re-checks its digest, which is
+why the escrow below had to be redeployed alongside it — the old escrow's
+`sourceContract` is immutable and points at the September 11 judgment contract.
+
+<details>
+<summary>Superseded — the 2026-09-11 deployment</summary>
 
 ```
 RecourseJudgment   0x0f385a4e7400a0693776D19102e0be75D334ce1c
 tx                 0x7cc0dbff9a96bb7266f0b261339f2b6224ca103eedbc4c107b0f9938d86e7c45
 result             FINALIZED · MAJORITY_AGREE  (5 committed, 5 revealed)
 ```
+
+It reads four plaintext strings and never fetches anything. Kept here only
+because its address still appears in `PROGRESS.md`'s session history.
+
+</details>
 
 There are **two** independent gates, and passing one does not pass the other:
 
@@ -238,11 +257,12 @@ successful StudioNet deploy as evidence it will fit on Bradbury.
 
 ## 3. Deploy the escrow (Base Sepolia)
 
-**✅ Deployed 2026-09-11:**
+**✅ Deployed 2026-09-14 — the current one:**
 
 ```
-RecourseEscrow   0x32288128Ff07Fc9e443161c1F336b784508a056A
-tx               0xbf432879b02f14c61040e92dd821a595aacf901529a6a35afcada8a5b2744564
+RecourseEscrow   0xD67C696CcA7e65bb2287097e06619F1c6D14De1c
+tx               0x44e436ce7b913bfb10306a9ef177d055ba0028cd5edc9378ca3deec7594962fc
+runtime           19,014 B  (was 16,651 B before the delivery-URL fields)
 ```
 
 Constructor:
@@ -274,7 +294,7 @@ forge create src/RecourseEscrow.sol:RecourseEscrow \
   --constructor-args \
     0x036CbD53842c5426634e7929541eC2318f3dCF7e \
     61997 \
-    0x0f385a4e7400a0693776D19102e0be75D334ce1c \
+    0xCc3117ebD2877AF3C66D36B38A4712afE37073f3 \
     0x49B4f09C5894c1C90B0ca9099AF3De0Faf7f3037 \
     500 \
     0xe5Fe9119000C9E1113dc504891A83Da7bbaa7a7b
@@ -302,7 +322,7 @@ limit.
 ### Verify — all seven immutables, not just the address
 
 ```bash
-E=0x32288128Ff07Fc9e443161c1F336b784508a056A
+E=0xD67C696CcA7e65bb2287097e06619F1c6D14De1c
 cast call $E "sourceContract()(address)"  --rpc-url "$BASE_RPC_URL"
 cast call $E "sourceChainId()(uint256)"   --rpc-url "$BASE_RPC_URL"
 cast call $E "relayer()(address)"         --rpc-url "$BASE_RPC_URL"
@@ -366,8 +386,13 @@ Development** alike:
 
 | Variable | Value | Required? |
 |:--|:--|:--|
-| `NEXT_PUBLIC_ESCROW_ADDRESS` | `0x32288128Ff07Fc9e443161c1F336b784508a056A` | **Yes** |
+| `NEXT_PUBLIC_ESCROW_ADDRESS` | `0xD67C696CcA7e65bb2287097e06619F1c6D14De1c` | **Yes** |
 | `NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL` | leave unset, or a keyed RPC if the public one rate-limits | No |
+
+⚠️ **This value changed on 2026-09-14.** The escrow was redeployed for the
+delivery-URL rebuild, so a Vercel project still holding the September 11 address
+will render a site that reads a contract the current frontend cannot deliver
+against. Update it and redeploy.
 
 That is the entire Vercel configuration. The frontend reads the verdict from
 Base, never from GenLayer, so it needs **no** GenLayer address, key, or RPC —

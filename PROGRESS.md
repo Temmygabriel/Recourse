@@ -3,7 +3,7 @@
 Work log, newest first. For durable decisions and constraints see
 [MEMORY.md](./MEMORY.md).
 
-**Deadline: Sept 17, 2026** (submission). Today: Sept 14, 2026.
+**Deadline: Sept 17, 2026** (submission). Today: Sept 15, 2026.
 
 ---
 
@@ -23,16 +23,16 @@ Work log, newest first. For durable decisions and constraints see
 | Frontend — wallet connect (Brave / multi-wallet) | 🟡 **rewritten in Session 14** (EIP-6963 discovery, picker, deferred network switch); typechecks and builds, **but has not been exercised against a real wallet** — see Session 14 for what to check |
 | CI (GitHub Actions) | 🟢 **all 5 jobs green on GitHub's runners** — Foundry toolchain pinned to `v1.8.1` since Session 15 (it was `stable`, and one run died on a 500 fetching the tarball) |
 | End-to-end loop | 🟡 **WAS closed on the old struct** — a real dispute settled on Base Sepolia with real USDC. The delivery-URL rebuild changes `Purchase` and `evidenceRoot`, so that run no longer describes this code. Re-running it is task #20 |
-| Demo content on chain | 🟡 **needs reseeding.** The old 7 purchases do not carry over — `getPurchase` gained two fields, and purchases #1–7 were delivered without a URL or artifact hash |
+| Demo content on chain | 🟢 **reseeded 2026-09-14 — 7 purchases, one in every stage, `totalHeld()` == the escrow's USDC balance (11.6 USDC)**. The seeder had to be taught to bootstrap a fresh escrow first; see Session 19 |
 | Verdict presentation | 🟢 **stamp landing + count-up added Session 16** — and it turned up a live bug: Tailwind was dropping every `stamp-*` / `status-*` tone class, so a RELEASE and a FULL REFUND rendered identically. Fixed with a safelist; verified with an isolated 3.4.17 build |
 | Evidence artifacts | 🟢 **4 artifacts written and one deliberate fault planted** — `docs/evidence/`, hosted in this repo as commit-pinned raw URLs. Pins go in `docs/evidence/pins.json` (see Session 18 for the two-commit dance that makes them non-circular) |
 | Hand-testing guide | 🟢 **`docs/TESTING.md` written — local only, gitignored, deliberately not in the repo** (it names the `.secrets/` key files and the exact values to type). Step-by-step, end to end, with a "what broken looks like" table and an honest section on what the system cannot prove |
 | README / security narrative | 🟢 README, `docs/SECURITY.md`, `docs/DEPLOY.md` all written — every cross-link resolves |
 | docs/MONEY_RAILS_AUDIT.md | 🟢 written — Issues 1–2 clean, Issue 3's gap closed by `totalHeld()`, Issue 4 still flagged unmeasured |
 | GitHub push wired up | 🟢 working — **including `.github/workflows/`**; the `workflow` scope is granted (re-verified 2026-09-12) |
-| GenLayer deploy (studio-dev 61997) | 🟡 **deployed, but stale** — `0x0f385a4e7400a0693776D19102e0be75D334ce1c`, FINALIZED · MAJORITY_AGREE, 5/5 validators. It does not fetch; the new revision must be redeployed to the same network (61997, **not** 61999) |
-| Base escrow deploy | 🟡 **deployed, but stale** — `0x32288128Ff07Fc9e443161c1F336b784508a056A`. `Purchase` gained two fields, so this build cannot accept a delivery from the new frontend. Redeploy with the new judgment address |
-| Vercel deploy | 🟡 **was READY** — still deployable, but `NEXT_PUBLIC_ESCROW_ADDRESS` must be repointed at the new escrow once it exists |
+| GenLayer deploy (studio-dev 61997) | 🟢 **redeployed 2026-09-14 — `0xCc3117ebD2877AF3C66D36B38A4712afE37073f3`**, FINALIZED · MAJORITY_AGREE, 5/5 validators, live `has_decision` probe returns. **Confirmed to be on Studio Next**, which the 2026-09-15 announcement makes the acceptance requirement — see Session 19 for the proof that Studio Next *is* 61997 |
+| Base escrow deploy | 🟢 **redeployed 2026-09-14 — `0xD67C696CcA7e65bb2287097e06619F1c6D14De1c`**, runtime 19,014 B, all seven immutables read back on chain |
+| Vercel deploy | 🟡 **was READY** — still deployable; `NEXT_PUBLIC_ESCROW_ADDRESS` must be set to `0xD67C696CcA7e65bb2287097e06619F1c6D14De1c` (the September 11 value is now wrong) |
 
 Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 
@@ -97,7 +97,85 @@ Legend: 🔴 not started · 🟡 in progress · 🟢 done · ⚠️ blocked
 
 ---
 
-## 2026-09-14 — Session 18 — the rebuild, executed. One Session 17 decision reversed.
+## 2026-09-15 — Session 19 — Studio Next confirmed, the demo reseeded, and the seeder was lying about what it could do
+
+### Studio Next is studio-dev, and this deployment is on it
+
+The GenLayer organisers sent a build-period announcement with a hard requirement:
+*"Your project must be deployed on Studio Next to be accepted into the hackathon."*
+It gives Studio Next as **chain id 61997**, RPC `https://studio-next.genlayer.com/api`,
+explorer `https://explorer-studio-dev.genlayer.com/`.
+
+61997 is the chain this project is already on, and the announcement's own explorer
+hostname says `studio-dev`. Two reads settle it rather than the name-matching:
+
+```
+POST https://studio-next.genlayer.com/api  {"method":"eth_chainId"}
+  → 0xf22d                                     # 61997
+
+POST https://studio-next.genlayer.com/api  {"method":"gen_getContractCode",
+     "params":["0xCc3117ebD2877AF3C66D36B38A4712afE37073f3"]}
+  → <base64 whose plaintext begins "# v0.3.0">
+```
+
+The second call is the one that matters: the RPC the organisers name **serves our
+contract's source back**. Studio Next and studio-dev are one network under two
+names, so the "did we deploy to the right place" question is closed — and the
+standing instruction not to be fobbed off onto studionet (61999) still holds.
+
+**The announcement's other technical ask does not apply to this build.**
+"Install `@genlayer/transaction-kit@0.1.0-rc.2` … alongside `genlayer-js@2.0.0-rc.1`"
+is guidance for a frontend that talks to GenLayer directly. Recourse's frontend
+reads the verdict **from Base**, never from GenLayer — the relayer is the only
+thing that touches GenLayer, and it is plain `fetch` over the JSON-RPC above.
+There is nothing to upgrade, and adding the kit would be the boilerplate that
+criterion "what have you built beyond the starter" asks us *not* to ship.
+
+### The seeder could not bootstrap the escrow it was written for
+
+`seed-demo.ts` opened at `id: 3`. It assumed purchase #1 (SETTLED in Session 13)
+and #2 (the offer the broken shell script corrupted) were already on chain and
+refused to run without them — which was correct for the September 12 chain and
+fatal for this one. The redeploy in Session 18 emptied the escrow, so the seeder
+had a plan for two rows that no longer existed anywhere.
+
+It failed loudly (`#3 does not exist, but the next id the contract will hand out
+is 1`), which is the only reason this cost minutes rather than a silent seeding
+against the wrong ids. **#1 and #2 are now ordinary slots in `SLOTS`**, and the
+script lays down its whole demo itself.
+
+What could not be recovered: the old #2's rubric, stored cut in half at a comma by
+the `cast` bug. It is not reproduced and could not be — this file passes a real
+`string[]`, which is the entire reason it exists. The reasoning that kept it in
+the demo is retained in the file's header as history, because it is still the
+reason a cancelled offer is *readable* rather than hidden.
+
+Seeded 2026-09-14, 7 purchases, and the `--inspect` reconciliation passes:
+
+```
+#1 OPEN  #2 OPEN  #3 OPEN  #4 FUNDED  #5 DELIVERED  #6 DISPUTED  #7 DELIVERED
+totalHeld()     11.6 USDC
+USDC at escrow  11.6 USDC
+✓ the escrow's books reconcile with its balance
+```
+
+No row is SETTLED, and that is not a gap to seed — settling needs a signed
+decision from the judgment, which a seeder cannot produce. `e2e-live.ts` creates
+its own purchase (`latestPurchaseId() + 1`) and settles it; that is task #20.
+
+### The favicon
+
+The site had none. There was also no logo file anywhere in the repo to use — the
+mark in the header is `ShieldCheckIcon`, an inline stroked SVG in `Icon.tsx`. So
+`frontend/src/app/icon.svg` is that shield **filled**, on the paper ground, with
+the check reversed out in the surface colour: a stroked shield loses its
+interior at 16px and reads as a smudge, a solid one keeps its silhouette. Next
+picks the file up by convention, so no metadata was added — declaring it in
+`metadata.icons` as well would name the same icon twice.
+
+---
+
+
 
 Session 17 decided *what* to build and stopped. This session built it, and on one
 point decided against Session 17. That reversal is the first item here because

@@ -56,8 +56,11 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SECRETS = resolve(HERE, '../../.secrets');
 
 const RPC = process.env['BASE_RPC_URL'] ?? 'https://sepolia.base.org';
+// Prefer the environment (`node --env-file=.env scripts/e2e-live.ts`). The
+// fallback is the live testnet deployment as of 2026-09-14 and must be updated
+// on every redeploy — see the same note in seed-demo.ts.
 const ESCROW = (process.env['ESCROW_ADDRESS'] ??
-  '0x32288128Ff07Fc9e443161c1F336b784508a056A') as Address;
+  '0xD67C696CcA7e65bb2287097e06619F1c6D14De1c') as Address;
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e' as Address;
 
 const transport = http(RPC, { retryCount: 3, timeout: 30_000 });

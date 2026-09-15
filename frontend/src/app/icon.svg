@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="Recourse">
+  <!--
+    The site icon: the header's shield-check mark (src/components/Icon.tsx,
+    ShieldCheckIcon), filled rather than stroked so it survives being drawn at
+    16px. An outline shield loses its interior at favicon size and reads as a
+    smudge; a solid one keeps its silhouette down to a single pixel of border.
+
+    Next picks this file up by convention — `app/icon.svg` is emitted as
+    <link rel="icon" type="image/svg+xml"> with no metadata entry, which is why
+    layout.tsx does not name it. Writing it into `metadata.icons` as well would
+    declare the same icon twice.
+
+    The colours are the tailwind.config.ts tokens by value, not by class: this
+    file is served raw, outside the CSS build. paper #E9F0E2, ink #1B2620,
+    surface #F3F7EE. If the palette moves, this file does not move with it —
+    that is the cost of not importing the theme into a standalone asset.
+  -->
+  <rect width="24" height="24" fill="#E9F0E2" />
+  <!-- Scaled slightly inside the box: a mark that touches the edge of a favicon
+       reads as clipped, and browsers already pad these inconsistently. -->
+  <g transform="translate(1.7 1.7) scale(0.86)">
+    <path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z" fill="#1B2620" />
+    <path
+      d="M9 12l2 2 4-4"
+      fill="none"
+      stroke="#F3F7EE"
+      stroke-width="2.2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+  </g>
+</svg>
