@@ -101,22 +101,92 @@ const SETTLED_EVENT = parseAbiItem(
 );
 
 /**
- * The settlement record for one purchase, or null if it has not settled.
+ * The escrow's deploy block, which is where the settlement scan starts.
  *
- * `fromBlock: 0n` is deliberate. The escrow's deploy block would be a cheaper
- * start, but a stale or misconfigured deploy block silently hides settlements,
- * and on a testnet the extra range costs a slightly slower call and nothing
- * else.
+ * THIS IS LOAD-BEARING, AND IT USED TO BE `0n`. That looked safer — a wider
+ * range cannot hide a settlement — but it silently broke every verdict on the
+ * site, which is worse than the problem it avoided.
+ *
+ * `eth_getLogs` is capped by the node, and Base's public RPC caps it at a
+ * 10,000-block range: ask for `0n..latest` and it answers with
+ * *"eth_getLogs is limited to a 10,000 range"*. `fetchSettlement` catches
+ * everything and returns null, so that error did not surface as an error — it
+ * surfaced as "this purchase has not been through a dispute". Purchase 9, which
+ * really is settled with a real partial refund, rendered as though no verdict
+ * existed at all.
+ *
+ * So the range is now anchored at the escrow's own deploy block and walked in
+ * windows the node will actually serve. The previous comment's worry — a stale
+ * deploy block silently hiding settlements — is real, which is why the value is
+ * an env var that ships beside `NEXT_PUBLIC_ESCROW_ADDRESS`: the two describe
+ * one deployment and are changed together. `frontend/.env.example` says so, and
+ * the deploy checklist in docs/DEPLOY.md repeats it.
+ */
+const LOG_RANGE_BLOCKS = 10_000n;
+
+const ESCROW_DEPLOY_BLOCK: bigint = (() => {
+  const raw = process.env.NEXT_PUBLIC_ESCROW_DEPLOY_BLOCK?.trim();
+  if (raw === undefined || raw === '') return 46_820_927n; // the deployed escrow
+  const n = BigInt(raw);
+  if (n < 0n) throw new Error(`NEXT_PUBLIC_ESCROW_DEPLOY_BLOCK is negative: ${raw}`);
+  return n;
+})();
+
+/**
+ * Logs for one query, fetched in windows the RPC will serve.
+ *
+ * `newestFirst` walks backwards from the tip and stops at the first window that
+ * returns anything. That is the right shape for "what happened to this one
+ * purchase", where the answer is almost always in the most recent window and
+ * the older ones would be pure latency.
+ *
+ * The window builder is a closure so its return type — which carries the
+ * `Settled` event's decoded `args` — is inferred by viem rather than written
+ * out by hand. A hand-written `ReturnType<…['getLogs']>` erases the event and
+ * `log.args` stops existing.
+ */
+async function getSettledLogs(
+  args: { purchaseId?: bigint },
+  opts: { newestFirst?: boolean } = {},
+) {
+  const client = publicClient();
+  const latest = await client.getBlockNumber();
+  const floor = ESCROW_DEPLOY_BLOCK > latest ? latest : ESCROW_DEPLOY_BLOCK;
+
+  const window = (fromBlock: bigint, toBlock: bigint) =>
+    client.getLogs({
+      address: ESCROW.address,
+      event: SETTLED_EVENT,
+      ...(args.purchaseId === undefined ? {} : { args: { purchaseId: args.purchaseId } }),
+      fromBlock,
+      toBlock,
+    });
+
+  type Logs = Awaited<ReturnType<typeof window>>;
+
+  if (opts.newestFirst === true) {
+    for (let end = latest; end >= floor; end -= LOG_RANGE_BLOCKS) {
+      const start = end >= floor + LOG_RANGE_BLOCKS - 1n ? end - LOG_RANGE_BLOCKS + 1n : floor;
+      const logs = await window(start, end);
+      if (logs.length > 0) return logs;
+    }
+    return [] as Logs;
+  }
+
+  const collected: Logs = [];
+  for (let start = floor; start <= latest; start += LOG_RANGE_BLOCKS) {
+    const end = start + LOG_RANGE_BLOCKS - 1n;
+    collected.push(...(await window(start, end > latest ? latest : end)));
+  }
+  return collected;
+}
+
+/**
+ * The settlement record for one purchase, or null if it has not settled.
  */
 export async function fetchSettlement(id: number): Promise<Settlement | null> {
   try {
-    const logs = await publicClient().getLogs({
-      address: ESCROW.address,
-      event: SETTLED_EVENT,
-      args: { purchaseId: BigInt(id) },
-      fromBlock: 0n,
-      toBlock: 'latest',
-    });
+    const logs = await getSettledLogs({ purchaseId: BigInt(id) }, { newestFirst: true });
     const log = logs[logs.length - 1];
     if (log === undefined) return null;
     const a = log.args;
@@ -152,29 +222,49 @@ export async function fetchSettlement(id: number): Promise<Settlement | null> {
  * `fetchSettlement`'s "latest log" rule — the two must agree, or the list and
  * the detail page would disagree about the same purchase.
  *
+ * The scan is incremental. `Settled` is append-only, so once a block range has
+ * been read it never needs reading again: the first call pays for the whole
+ * span from the deploy block, and every poll after it asks only for the blocks
+ * that arrived since. Without that, the 20-second poll would re-walk nine
+ * windows forever against an RPC that is already rate-limited.
+ *
  * A failure here is swallowed: it costs the list its colour coding and nothing
  * else, and the rows still render against a neutral bar. That is a better
  * outcome than taking the whole list down over a decoration.
  */
+const outcomes = new Map<number, number>();
+/** Highest block the cache above has been built through; -1n means "not yet". */
+let outcomesScannedThrough = -1n;
+
 export async function fetchSettledOutcomes(): Promise<Map<number, number>> {
-  const outcomes = new Map<number, number>();
   try {
-    const logs = await publicClient().getLogs({
-      address: ESCROW.address,
-      event: SETTLED_EVENT,
-      fromBlock: 0n,
-      toBlock: 'latest',
-    });
-    for (const log of logs) {
-      const id = log.args.purchaseId;
-      const outcome = log.args.outcome;
-      if (id === undefined || outcome === undefined) continue;
-      outcomes.set(Number(id), Number(outcome));
+    const client = publicClient();
+    const latest = await client.getBlockNumber();
+    const floor = ESCROW_DEPLOY_BLOCK > latest ? latest : ESCROW_DEPLOY_BLOCK;
+    const start0 = outcomesScannedThrough < floor ? floor : outcomesScannedThrough + 1n;
+
+    for (let start = start0; start <= latest; start += LOG_RANGE_BLOCKS) {
+      const end = start + LOG_RANGE_BLOCKS - 1n;
+      const logs = await client.getLogs({
+        address: ESCROW.address,
+        event: SETTLED_EVENT,
+        fromBlock: start,
+        toBlock: end > latest ? latest : end,
+      });
+      for (const log of logs) {
+        const id = log.args.purchaseId;
+        const outcome = log.args.outcome;
+        if (id === undefined || outcome === undefined) continue;
+        outcomes.set(Number(id), Number(outcome));
+      }
+      outcomesScannedThrough = end > latest ? latest : end;
     }
   } catch {
-    // See above — this costs a colour, not the page.
+    // See above — this costs a colour, not the page. The cursor is deliberately
+    // NOT advanced on a throw, so the blocks that failed are retried next poll
+    // rather than being skipped over permanently.
   }
-  return outcomes;
+  return new Map(outcomes);
 }
 
 /** The dispute bond the contract would charge for this price. */

@@ -36,11 +36,17 @@ import {
   TxLink,
 } from '@/components/Document';
 import { PromiseVsEvidence } from '@/components/PromiseVsEvidence';
+import { AwaitingVerdict } from '@/components/AwaitingVerdict';
 import { RequirementList, type RequirementMark } from '@/components/RequirementList';
 import { STAGE } from '@/lib/abi';
 import { formatUsdc } from '@/lib/chain';
 import { fetchPurchase, fetchSettlement } from '@/lib/escrow';
-import { WHO_DECIDED_NOTE, refundDescription, verdictLine } from '@/lib/status';
+import {
+  NO_JUDGMENT_NOTE,
+  WHO_DECIDED_NOTE,
+  refundDescription,
+  verdictLine,
+} from '@/lib/status';
 import { useAsync } from '@/lib/useAsync';
 import { useCountUpUsdc } from '@/lib/useCountUp';
 
@@ -101,11 +107,27 @@ export default function VerdictPage() {
         <div className="page-head">
           <h1>Verdict #{id}</h1>
         </div>
-        <Notice>
-          {purchase.stage === STAGE.DISPUTED
-            ? 'The case is still being decided. This page will show the finding as soon as the settlement lands on Base.'
-            : 'This purchase has not been through a dispute, so there is no verdict to show.'}
-        </Notice>
+
+        {purchase.stage === STAGE.DISPUTED ? (
+          /*
+            The case is with GenLayer and has no finding on Base yet. This used
+            to be a one-line Notice; it is now the full waiting state, because
+            "still being decided" was indistinguishable from a broken page and
+            gave no scale for how long a real verdict takes. See AwaitingVerdict.
+          */
+          <AwaitingVerdict
+            id={id}
+            disputedBitmap={purchase.disputedBitmap}
+            criteriaCount={purchase.criteriaCount}
+          />
+        ) : (
+          <Notice>
+            {purchase.stage === STAGE.SETTLED
+              ? NO_JUDGMENT_NOTE
+              : 'This purchase has not been through a dispute, so there is no verdict to show.'}
+          </Notice>
+        )}
+
         <p className="mt-4">
           <Link href={`/offers/${id}`}>Back to the purchase</Link>
         </p>

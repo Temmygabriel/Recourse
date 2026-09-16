@@ -171,10 +171,55 @@ export const WALLET_IS_NOT_IDENTITY_NOTE =
   'Wallet addresses are not identity checks — the same person can have many, and ' +
   'several people can share one. Activity is shown as a fact, not a trust score.';
 
-/** Build spec §4.1 requires this to be stated, in the UI and the README. */
+/** Design spec §4.1 requires this to be stated, in the UI and the README. */
 export const TRUST_BOUNDARY_NOTE =
   'The relayer that carries a verdict from GenLayer to Base is a trusted prototype ' +
   'component. This is a testnet build and no real funds are involved.';
+
+// --- A dispute that has not been decided yet ---------------------------------
+
+/**
+ * The headline on a case that is with GenLayer and has no finding on Base yet.
+ *
+ * A disputed purchase is the one state on this site that a visitor cannot
+ * resolve by waiting a few seconds, and the old copy ("The case is still being
+ * decided") gave them nothing to hold on to: no idea whether it was working,
+ * how long it takes, or whether they needed to do something. Three separate
+ * people watching the same screen could not tell "GenLayer is reading it" from
+ * "this is broken and has been for an hour".
+ *
+ * So this names the three things that were missing — who decides, roughly how
+ * long, and that the page updates itself — and it does not promise a time.
+ */
+export const AWAITING_VERDICT_HEADLINE = 'GenLayer’s validators are reading this case';
+
+/**
+ * The explanation under that headline.
+ *
+ * Deliberately says a *separate step* carries the answer to Base, because that
+ * is literally true and it is the fact that decides whether a stuck-looking
+ * case is stuck. It does not say "please wait" and leave the reader to guess,
+ * and it does not claim the wait is short — a real verdict is real validators
+ * reading real text, and that takes minutes, not seconds.
+ */
+export const AWAITING_VERDICT_NOTE =
+  'The promise, the acceptance criteria and the delivered file are frozen, and ' +
+  'GenLayer’s validator network is comparing them. Their finding is carried to ' +
+  'Base in a separate step, and this page will show it the moment it lands. ' +
+  'There is nothing to click and nothing to send.';
+
+/** Says the page is live, so a reader knows silence is not a frozen screen. */
+export const AWAITING_VERDICT_POLLS =
+  'This page checks for the finding every 20 seconds and updates on its own — ' +
+  'you do not need to reload it.';
+
+/**
+ * Shown on a settled-but-unjudged purchase, where "no verdict" is the correct
+ * and final answer rather than a wait.
+ */
+export const NO_JUDGMENT_NOTE =
+  'This purchase settled by the deadline rules, so no verdict was ever needed ' +
+  'and there is none to show.';
 
 // --- Waiting for the chain to catch up -------------------------------------
 

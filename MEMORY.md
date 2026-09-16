@@ -444,6 +444,68 @@ until the chain agrees, with the page showing an explicit "waiting for this page
 to catch up" state and, on timeout, saying so rather than asserting either
 outcome. See *The frontend waits for the chain after every write* below.
 
+### ⚠️ `eth_getLogs` is capped at 10,000 blocks — and a swallowed failure hid every verdict
+
+Found 2026-09-16, Session 20, while chasing "the dispute never shows a verdict".
+This is the single highest-consequence bug found in this build, because it made
+a *working* system look broken and it failed silently.
+
+**The trap.** `https://sepolia.base.org` refuses any `eth_getLogs` range wider
+than 10,000 blocks:
+
+```
+{"code":-32614,"message":"eth_getLogs is limited to a 10,000 range"}
+```
+
+`fetchSettlement` read `Settled` with `fromBlock: 0n, toBlock: 'latest'` — the
+whole chain, ~47M blocks. **Every call failed.** The function wraps everything in
+`try/catch` and returns `null` on any throw, deliberately, so a flaky read does
+not take a page down. So the RPC error did not appear as an error. It appeared
+as the *absence of a verdict*:
+
+| Screen | Rendered as |
+|:--|:--|
+| `/verdict/9` (really settled, PARTIAL_REFUND) | "This purchase has not been through a dispute" |
+| `/verdict/<disputed>` | "The case is still being decided" — forever |
+| offers list | every settled row lost its outcome colour |
+
+`fetchSettledOutcomes` (the list's colour map) had the identical bug, and its
+catch is documented as costing "a colour, not the page" — which is exactly why
+nobody looked.
+
+**What made this so expensive to find:** it looked like the relayer wasn't
+running, and for a while it genuinely wasn't. Two independent faults, one
+visible symptom. The relayer was a red herring for the render path — and the
+render path was a red herring for the relayer. **Check both.** A settlement
+present on chain but invisible in the UI is this bug, not the relayer.
+
+**How the code handles it now** (`frontend/src/lib/escrow.ts`):
+
+- `LOG_RANGE_BLOCKS = 10_000n`, and every scan walks in windows the node serves.
+- The floor is `NEXT_PUBLIC_ESCROW_DEPLOY_BLOCK`, defaulting in code to the
+  current escrow's deploy block (46820927). **It must move with
+  `NEXT_PUBLIC_ESCROW_ADDRESS`** — the two describe one deployment.
+- `fetchSettlement` walks **newest-first** and stops at the first window that
+  hits, so the common case is one request.
+- `fetchSettledOutcomes` scans **incrementally** from a cursor, because
+  `Settled` is append-only: the first poll pays for the whole span, later polls
+  ask only for new blocks. Its cursor is deliberately *not* advanced on a throw.
+- The mapping was verified against the live chain, not just typechecked:
+  purchase 9 → `outcome=1 bps=3333 bitmap=6`, purchase 10 → `outcome=1 bps=3333
+  bitmap=4`, 9 windows, all six settlements found.
+
+**The generalisable rule:** a `catch` that returns a *plausible empty value*
+converts an infrastructure error into a content claim. `null` here means "this
+purchase has not settled" — a statement about the world — but it was being
+returned for "the RPC refused to answer". When a fallback value is
+indistinguishable from real data, the failure has to be louder than the
+fallback.
+
+**Nothing caught it.** `tsc` was clean, `next build` was clean, 139 Foundry
+tests and 40 relayer tests were green. Every one of those tests the code that
+exists; none of them runs against the RPC the browser actually talks to. That is
+the gap this bug lived in.
+
 ---
 
 ## The frontend waits for the chain after every write

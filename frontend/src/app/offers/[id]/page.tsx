@@ -40,6 +40,7 @@ import {
 } from '@/components/Document';
 import { RequirementList } from '@/components/RequirementList';
 import { ArtifactRef } from '@/components/ArtifactRef';
+import { AwaitingVerdict } from '@/components/AwaitingVerdict';
 import { STAGE, type Purchase } from '@/lib/abi';
 import {
   ESCROW_EXPLAINER,
@@ -210,14 +211,18 @@ export default function OfferPage() {
           )}
 
           {purchase.stage === STAGE.DISPUTED && (
-            <div className="doc-card px-4 py-4 sm:px-5">
-              <p className="text-[14px]">
-                {purchase.disputeNotes === ''
-                  ? 'A dispute is open on this purchase.'
-                  : 'This purchase is in dispute.'}{' '}
-                <Link href={`/case/${id}`}>See the promise beside the evidence &rarr;</Link>
-              </p>
-            </div>
+            /*
+              The same waiting state the verdict page shows, rather than the
+              one-line "this purchase is in dispute" card this used to be. A
+              reader who lands here from the list is asking the same question
+              the verdict page's visitor is, and the two screens answering it
+              differently was the drift this component exists to stop.
+            */
+            <AwaitingVerdict
+              id={id}
+              disputedBitmap={purchase.disputedBitmap}
+              criteriaCount={purchase.criteriaCount}
+            />
           )}
 
           {purchase.stage === STAGE.SETTLED && (

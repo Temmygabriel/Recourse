@@ -55,6 +55,20 @@ dist/
 # that purchases were already settled.
 .relayer-state.json
 .relayer-state.json.tmp
+# Its output, not its source. A run log records one machine's dispute at one
+# moment — and the two cited in MEMORY.md are reproduced there as transcript
+# text rather than as files, so nothing here is load-bearing.
+*.relayer.log
+relayer-live.log
+run-*.log
+
+# --- local working notes ---------------------------------------------------
+# Hand-testing guide, submission notes, and other people's specs that happen to
+# live in this directory. docs/TESTING.md is deliberately local-only: it names
+# the .secrets/ key files and gives exact values to type.
+docs/TESTING.md
+docs/recourse-submission-note*.md
+factor_prover_ui_fix_exact.md
 
 # --- os / editor -----------------------------------------------------------
 .DS_Store
