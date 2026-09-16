@@ -57,6 +57,102 @@ reason: criterion 1 not met because finding 4 "carries no severity rating"
 This is a live, independent GenLayer judgment — not scripted — and it landed
 exactly on the outcome `docs/evidence/README.md` predicted for this artifact
 when it was written. State file confirmed the verdict persisted as
+`"evaluated"` (not terminal), so flipping `DRY_RUN=false` and re-running did
+not re-ask GenLayer; it signed and broadcast the same stored decision. Ran it
+for real. Result: SETTLED.
+
+```
+outcome PARTIAL_REFUND, refundBps 3333
+Base settle() tx:   0x2256e46fda428d7eb504137901fe607a2fb0be3cf2fbf1940fa63b3b00dbcf64
+GenLayer verdict tx: 0x892d90e7828278456f3bb6263817eab9b3ffaa507d9f3539ac601198575cf30b
+decisionDigest:     0x4e0aa0ffe8f2cfe6514cd6756967608dbe10735ae56108fffdd506dcb5d5db34
+```
+
+**Task #20 is closed.** Purchase 9 is a real, live, settled example on the
+current contracts — view it at /verdict/9 and /receipt/9 once the frontend is
+pointed at it. This is the strongest piece of evidence the submission note
+needed and it is now filled in there, not left as a placeholder.
+
+A separate, unrelated matter came up mid-session: a reviewer complaint on a
+*different* GenLayer project (Proofmark, same author) flagged that its
+evidence model depends on a single `raw.githubusercontent.com` host with no
+fallback. Recourse has the identical design — `EVIDENCE_HOST_PREFIX` is a
+Solidity `constant`, immutable in the bytecode, no fallback host. Checked
+`docs/SECURITY.md`'s Known gaps list: this is **not currently disclosed there**,
+even though the tradeoff is already argued honestly in
+`genlayer-delivery-evidence-notes.md` section 10. Decided **not** to redeploy
+to add a fallback — no time, and it would invalidate the settle() run this
+session just produced. Decided instead to add a Known gaps entry pointing at
+the existing reasoning. [NOT YET DONE — next session or next available
+minute, whichever comes first.]
+
+### Next
+1. Add the single-evidence-host disclosure to `docs/SECURITY.md`'s Known gaps
+   (two minutes, no redeploy — see above). Not done this session, deadline
+   pressure won out.
+2. Fix `ownReconciliationCheck` in `e2e-live.ts` to sum all live purchases,
+   not just the one just created — currently gives a false alarm on any
+   non-empty escrow. Cosmetic for the demo (the real invariant it also checks
+   passed), but worth a note so a future run isn't second-guessed by it.
+3. Demo video — still not recorded. Time is the binding constraint now, not
+   remaining technical work.
+
+---
+
+## 2026-09-16 — Session 20 — moved to Codespaces, restored the secrets, and closed task #20 for real
+
+The move off the Windows machine (Session 19's environment) meant `.secrets/`
+and `relayer/.env` did not travel with `git clone` — they are gitignored by
+design. Recreated `.secrets/deployer.json`, `.secrets/demo.json`,
+`.secrets/relayer.json` (address+key JSON, for `e2e-live.ts`'s own loader) and,
+separately, `.secrets/relayer.key` (bare hex, no JSON wrapper — this is the
+shape `relayer/src/config.ts`'s `loadPrivateKey` actually parses, and it is not
+the same file as `relayer.json`). All three wallets confirmed still funded on
+Base Sepolia before spending anything:
+
+```
+deployer  0.0399 ETH   50.82 USDC
+relayer   0.00099 ETH  (low — worth topping up before a live demo)
+demo      0.00998 ETH  11.58 USDC
+```
+
+Ran `node scripts/e2e-live.ts` against the current (2026-09-14 redeploy)
+contracts, which had never been exercised end to end since the delivery-URL
+rebuild. First attempt failed at `purchase()` with `transferFrom failed` after
+4 retries — a known, already-documented flakiness in this exact script (the
+comment above `send()` describes this precisely: an `approve` that mines
+before a lagging RPC read of it propagates). Re-ran; it resumed from the
+existing OPEN offer rather than creating a new one, and completed purchase,
+delivery, and dispute cleanly:
+
+```
+purchase 9   price 5 USDC   bond 0.25 USDC
+delivered:   docs/evidence/escrow-review.md, artifact hash confirmed live
+disputed:    disputedBitmap 0b001 (criterion 0)
+```
+
+The script's own `ownReconciliationCheck` then threw `ACCOUNTING FAILURE`.
+**This is a bug in the check, not the contract.** It asserts `totalHeld() ==
+price + bond`, which only holds on a completely empty escrow. This deployment
+already carries 6.5 USDC from the Session 19 reseed (purchases in
+FUNDED/DELIVERED/DISPUTED), so `totalHeld()` was correctly `11.75` (6.5 + 5.25)
+— and it matched the escrow's real USDC balance exactly, which is the check
+that actually matters for correctness and the one the contract's `totalHeld()`
+view exists to support. No money was misplaced. The script needs its second
+assertion fixed (sum committed amounts across *all* live purchases, not just
+the one it just created) before it's run again against a non-empty escrow —
+filed as a follow-up, not fixed this session, time did not allow it.
+
+Built and ran the relayer for real against purchase 9. `DRY_RUN=true` first:
+
+```
+verdict: PARTIAL_REFUND, refund_bps 3333, criteria_met [false, true, true]
+reason: criterion 1 not met because finding 4 "carries no severity rating"
+```
+
+This is a live, independent GenLayer judgment — not scripted — and it landed
+exactly on the outcome `docs/evidence/README.md` predicted for this artifact
+when it was written. State file confirmed the verdict persisted as
 `"evaluated"` (not terminal), so flipping `DRY_RUN=false` and re-running does
 not re-ask GenLayer; it signs and broadcasts the same stored decision. [THIS
 LINE TO BE UPDATED ONCE THE REAL BROADCAST RUN COMPLETES — see the settle()
