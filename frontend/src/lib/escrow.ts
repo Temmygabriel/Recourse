@@ -29,7 +29,7 @@ import {
   walletClient,
 } from './chain';
 import type { Purchase } from './abi';
-import { erc20Abi, escrowAbi } from './abi';
+import { erc20Abi, escrowAbi, STAGE } from './abi';
 
 // --- Reads -----------------------------------------------------------------
 
@@ -100,6 +100,10 @@ const SETTLED_EVENT = parseAbiItem(
   'event Settled(uint256 indexed purchaseId, uint8 outcome, uint16 refundBps, uint8 criteriaMetBitmap, uint256 buyerAmount, uint256 sellerAmount, uint256 bondToBuyer, uint256 bondToSeller, uint256 nonce, bytes32 genlayerTxHash, bytes32 decisionDigest)',
 );
 
+const DISPUTE_OPENED_EVENT = parseAbiItem(
+  'event DisputeOpened(uint256 indexed purchaseId, address indexed buyer, uint8 disputedBitmap, bytes32 disputeHash, uint96 bond)',
+);
+
 /**
  * The escrow's deploy block, which is where the settlement scan starts.
  *
@@ -133,22 +137,66 @@ const ESCROW_DEPLOY_BLOCK: bigint = (() => {
 })();
 
 /**
- * Logs for one query, fetched in windows the RPC will serve.
+ * Every `[fromBlock, toBlock]` window covering the escrow's life, in the order
+ * asked for.
  *
- * `newestFirst` walks backwards from the tip and stops at the first window that
- * returns anything. That is the right shape for "what happened to this one
- * purchase", where the answer is almost always in the most recent window and
- * the older ones would be pure latency.
+ * One copy, shared by every log read in this module. The boundary arithmetic is
+ * the whole reason this module has a scar: ask for a range wider than the node
+ * serves and the node refuses, and because these reads catch everything the
+ * refusal arrives as *absence of data* rather than as an error. Two copies of
+ * this loop that drifted apart would put that bug straight back.
+ */
+function logWindows(
+  floor: bigint,
+  latest: bigint,
+  newestFirst: boolean,
+): { fromBlock: bigint; toBlock: bigint }[] {
+  const out: { fromBlock: bigint; toBlock: bigint }[] = [];
+  if (newestFirst) {
+    for (let end = latest; end >= floor; end -= LOG_RANGE_BLOCKS) {
+      const start = end >= floor + LOG_RANGE_BLOCKS - 1n ? end - LOG_RANGE_BLOCKS + 1n : floor;
+      out.push({ fromBlock: start, toBlock: end });
+    }
+    return out;
+  }
+  for (let start = floor; start <= latest; start += LOG_RANGE_BLOCKS) {
+    const end = start + LOG_RANGE_BLOCKS - 1n;
+    out.push({ fromBlock: start, toBlock: end > latest ? latest : end });
+  }
+  return out;
+}
+
+/**
+ * The `Settled` logs for one purchase, searched from BOTH ends at once.
+ *
+ * The earlier version walked backwards from the tip and stopped at the first
+ * window that hit. That is right for a dispute that settled minutes ago and
+ * wrong for every older one, and the escrow only gets older: measured on
+ * 2026-09-21, a settlement from five days earlier cost 22 windows and 8.1s
+ * walking back from the tip, while the same settlement found from the deploy
+ * block cost 5 windows and 1.5s.
+ *
+ * Neither direction wins on its own — walking forward is worst for a dispute
+ * that settled just now, and walking back is worst for one that settled early —
+ * and we cannot know which we are in without looking. So both walks advance one
+ * window per round, in parallel, and the first to hit wins. That costs at most
+ * two requests in flight (where a whole-history scan once cost thirty in
+ * series), and time proportional to the *shorter* of the two distances rather
+ * than to whichever one the old code happened to pick.
+ *
+ * A window that throws does not abort the search. `Promise.allSettled` is used
+ * deliberately: a settlement is guaranteed to exist here (the caller checked
+ * the stage first), so one refused window must cost a retry at the next poll,
+ * not a confident "no verdict" — which is the exact failure this module exists
+ * to stop repeating. The caller's `catch` still turns a total failure into
+ * null.
  *
  * The window builder is a closure so its return type — which carries the
  * `Settled` event's decoded `args` — is inferred by viem rather than written
  * out by hand. A hand-written `ReturnType<…['getLogs']>` erases the event and
  * `log.args` stops existing.
  */
-async function getSettledLogs(
-  args: { purchaseId?: bigint },
-  opts: { newestFirst?: boolean } = {},
-) {
+async function getSettledLogs(args: { purchaseId?: bigint }) {
   const client = publicClient();
   const latest = await client.getBlockNumber();
   const floor = ESCROW_DEPLOY_BLOCK > latest ? latest : ESCROW_DEPLOY_BLOCK;
@@ -164,33 +212,75 @@ async function getSettledLogs(
 
   type Logs = Awaited<ReturnType<typeof window>>;
 
-  if (opts.newestFirst === true) {
-    for (let end = latest; end >= floor; end -= LOG_RANGE_BLOCKS) {
-      const start = end >= floor + LOG_RANGE_BLOCKS - 1n ? end - LOG_RANGE_BLOCKS + 1n : floor;
-      const logs = await window(start, end);
-      if (logs.length > 0) return logs;
-    }
-    return [] as Logs;
-  }
+  const forward = logWindows(floor, latest, false);
+  const backward = logWindows(floor, latest, true);
+  const rounds = Math.max(forward.length, backward.length);
 
-  const collected: Logs = [];
-  for (let start = floor; start <= latest; start += LOG_RANGE_BLOCKS) {
-    const end = start + LOG_RANGE_BLOCKS - 1n;
-    collected.push(...(await window(start, end > latest ? latest : end)));
+  for (let i = 0; i < rounds; i++) {
+    const pending: Promise<Logs>[] = [];
+    const f = forward[i];
+    const b = backward[i];
+    if (f !== undefined) pending.push(window(f.fromBlock, f.toBlock));
+    if (b !== undefined) pending.push(window(b.fromBlock, b.toBlock));
+
+    const settled = await Promise.allSettled(pending);
+    for (const r of settled) {
+      if (r.status === 'fulfilled' && r.value.length > 0) return r.value;
+    }
   }
-  return collected;
+  return [] as Logs;
 }
 
 /**
- * The settlement record for one purchase, or null if it has not settled.
+ * Settlements already found, so a poll never pays for the same answer twice.
+ *
+ * `settle()` runs at most once per purchase, so a settlement is immutable and
+ * safe to hold for the life of the page. **Only hits are cached.** A miss is
+ * not a fact about the world — it is either "not settled yet", which flips the
+ * moment `settle()` mines, or "the RPC would not answer" — and pinning either
+ * of those would leave a settled purchase reading as unjudged forever, which is
+ * the precise failure this module was rewritten to stop repeating.
+ *
+ * Keyed by purchase id alone. That is sound because one build talks to exactly
+ * one escrow: `NEXT_PUBLIC_ESCROW_ADDRESS` is inlined at build time, so a
+ * redeploy is a new bundle with a new empty map.
  */
-export async function fetchSettlement(id: number): Promise<Settlement | null> {
+const settlementCache = new Map<number, Settlement>();
+
+/**
+ * The settlement record for one purchase, or null if it has not settled.
+ *
+ * ASK THE STAGE FIRST — this is the difference between a page that paints and a
+ * page that looks broken. The escrow sets `stage = SETTLED` and emits `Settled`
+ * in the same transaction, so `stage !== SETTLED` proves no such log exists and
+ * the scan below can be skipped entirely. Without that check, a purchase that
+ * has *not* settled is the worst case for the scan rather than the cheapest:
+ * there is nothing to find, so it walks the escrow's entire history — 30
+ * requests and 16.4 seconds when this was measured on 2026-09-21 — on every
+ * load of a disputed case, which is exactly the screen a person stares at while
+ * they wait. With the check it is zero log requests.
+ *
+ * `stage` is passed in by callers that already read the purchase, because every
+ * current caller does. When it is omitted — or the purchase could not be read —
+ * the stage is fetched here rather than assumed, since assuming "not settled"
+ * is the one wrong answer that would hide a real verdict.
+ */
+export async function fetchSettlement(
+  id: number,
+  opts: { stage?: number } = {},
+): Promise<Settlement | null> {
+  const cached = settlementCache.get(id);
+  if (cached !== undefined) return cached;
+
   try {
-    const logs = await getSettledLogs({ purchaseId: BigInt(id) }, { newestFirst: true });
+    const stage = opts.stage ?? (await fetchPurchase(id))?.stage;
+    if (stage !== STAGE.SETTLED) return null;
+
+    const logs = await getSettledLogs({ purchaseId: BigInt(id) });
     const log = logs[logs.length - 1];
     if (log === undefined) return null;
     const a = log.args;
-    return {
+    const settlement: Settlement = {
       outcome: Number(a.outcome),
       refundBps: Number(a.refundBps),
       criteriaMetBitmap: Number(a.criteriaMetBitmap),
@@ -204,6 +294,89 @@ export async function fetchSettlement(id: number): Promise<Settlement | null> {
       blockNumber: log.blockNumber ?? 0n,
       txHash: log.transactionHash ?? `0x${'0'.repeat(64)}`,
     };
+    settlementCache.set(id, settlement);
+    return settlement;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * How long a dispute has been open, as far as Base can prove it.
+ *
+ * `since` is a Unix timestamp; `exact` says whether it is the real opening time
+ * or only an upper bound on it. See `fetchDisputeOpened`.
+ */
+export interface DisputeAge {
+  /** Unix seconds. The dispute opened at this time, or at or before it. */
+  since: number;
+  /** True when `since` is the real opening block's timestamp. */
+  exact: boolean;
+}
+
+/**
+ * Only hits are cached, for the reason `settlementCache` gives: the value is a
+ * fact about a block that has already been mined, so it cannot change, but a
+ * miss can — a purchase that has no dispute today can be disputed tomorrow.
+ */
+const disputeCache = new Map<number, DisputeAge>();
+
+/**
+ * When the dispute on this purchase was opened, or null if it could not be read.
+ *
+ * ONE REQUEST ANSWERS IT IN BOTH DIRECTIONS, which is why a screen that has to
+ * paint immediately can afford to ask. The waiting screen needs one bit — "has
+ * this been pending unusually long?" — and the newest 10,000 blocks settle it
+ * either way:
+ *
+ *   - the log is in that window: its block carries the timestamp, so the age is
+ *     exact;
+ *   - the log is not in it: the dispute opened before the window began, which
+ *     *is* the answer, and the window's opening block turns it into a floor.
+ *
+ * 10,000 blocks is over five hours of Base, so the second case cannot be
+ * confused with a fresh dispute. This deliberately is not the two-directional
+ * walk `getSettledLogs` runs: that searches for a log whose position is unknown
+ * anywhere in the escrow's life, while this one only ever has to look at the
+ * recent end, and `purchaseId` is indexed so the node filters it server-side.
+ *
+ * A purchase can be disputed only once — `openDispute` requires
+ * `stage == DELIVERED`, which a dispute leaves behind — so the first log in the
+ * window is the only one.
+ *
+ * **Callers must already know a dispute exists** (`stage === DISPUTED`). The
+ * absence branch is only meaningful as "the dispute is older than the window";
+ * on an undisputed purchase it would report an ancient wait that is really just
+ * a log that was never written.
+ */
+export async function fetchDisputeOpened(id: number): Promise<DisputeAge | null> {
+  const cached = disputeCache.get(id);
+  if (cached !== undefined) return cached;
+
+  try {
+    const client = publicClient();
+    const latest = await client.getBlockNumber();
+    const floor = ESCROW_DEPLOY_BLOCK > latest ? latest : ESCROW_DEPLOY_BLOCK;
+    const fromBlock =
+      latest >= floor + LOG_RANGE_BLOCKS - 1n ? latest - LOG_RANGE_BLOCKS + 1n : floor;
+
+    const logs = await client.getLogs({
+      address: ESCROW.address,
+      event: DISPUTE_OPENED_EVENT,
+      args: { purchaseId: BigInt(id) },
+      fromBlock,
+      toBlock: latest,
+    });
+
+    const log = logs[0];
+    // The anchor is the log's own block when there is one, and the window's
+    // opening block when there is not — in which case `exact` is false and the
+    // timestamp is a "no later than" rather than a "was".
+    const block = await client.getBlock({ blockNumber: log?.blockNumber ?? fromBlock });
+
+    const age: DisputeAge = { since: Number(block.timestamp), exact: log !== undefined };
+    disputeCache.set(id, age);
+    return age;
   } catch {
     return null;
   }

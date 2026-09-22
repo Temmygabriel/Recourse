@@ -3,6 +3,84 @@
 Work log, newest first. For durable decisions and constraints see
 [MEMORY.md](./MEMORY.md).
 
+## 2026-09-21 — Session 21 — the verdict that was never asked for, and the screen that could not say so
+
+**Starting point: a reviewer's report.** "The verdict itself has been stuck on
+`verdict#11` for far longer than the project's own docs describe. So I can't
+confirm whether the injection was actually caught." That was the one question
+the demo existed to answer, and it had no answer.
+
+**It was not the render path, and it was not the code. It was two faults.**
+
+### 1. The relayer had been dead for four days
+
+`relayer/relayer-live.log` ends at **2026-09-16T17:43:15Z** — the shell it was
+running in closed. Purchase 11 was delivered at `2026-09-18T06:33:20Z` and
+disputed at `2026-09-18T06:43:46Z`, both ~13 hours after the process was gone.
+GenLayer was never asked about purchase 11, so **no verdict existed and none
+ever had**. Confirmed three ways: the state file has no entry for 11; a
+30-window scan of `Settled` filtered on `purchaseId = 11` returns zero logs; and
+`getPurchase(11)` reads `stage = 4` (DISPUTED) live.
+
+The code was innocent. `tick()` re-enumerates every purchase on every tick, so a
+restart would have caught up — nobody restarted it. The last ~40 log lines are
+`tick failed` (`fetch failed` on `purchaseCount()`), which is to say it spent its
+final minutes failing loudly and looking exactly like a relayer with nothing to
+do. **The prompt injection is still unproven, because the judgment never ran.**
+
+Fix: `.github/workflows/relayer.yml` runs it on a schedule (every 5 min, one
+bounded ~4.5-min run, `concurrency` so two never overlap, state carried in the
+Actions cache). Documented in `docs/DEPLOY.md` §4.
+
+### 2. The waiting screen was the render path's worst case
+
+`fetchSettlement` had no stage check, so a purchase that had *not* settled was
+the most expensive case rather than the cheapest: nothing to find meant walking
+the escrow's entire history — **30 requests, 16.4 seconds**, on the first load
+of every disputed case. That is exactly the screen the reviewer sat in front of.
+
+The scan now asks the stage first (the escrow sets `stage = SETTLED` in the same
+transaction that emits `Settled`, so it is authoritative and free), which takes
+the disputed case to **zero log requests**. Where a scan is still needed it now
+advances both directions concurrently: newest-first had become the slow path
+(8–9.6s, 22–27 windows) as the escrow aged, while a forward walk is 31 windows
+for a fresh settlement. Measured after the rewrite: **1.7–4.3s**, outcomes
+unchanged (`#6=1 #7=0 #8=2 #10=1`).
+
+### 3. The screen now distinguishes slow from dead
+
+`AwaitingVerdict` gained a second state. Past **30 minutes** the copy changes to
+say the wait is unusual and that nothing has been decided against either party —
+which is the fact a reader most needs and cannot get anywhere else. The age is
+the *dispute's*, read from the `DisputeOpened` log (the only place it exists;
+the `Purchase` struct has no `disputedAt`), and the read is issued after mount
+so it never delays the first paint. One window answers it in both directions:
+found → exact age; not found in the newest 10,000 blocks (~5 hours) → provably
+past the threshold, reported as "at least".
+
+The ABI was proven against real logs before being trusted — `getLogs` returns
+`[]` for a wrong signature and for no matches alike, and the newest window
+happened to contain zero `DisputeOpened` logs, which would have rendered *every*
+case as a long wait. Walking the escrow's life found six real disputes
+(11, 9, 10, 7, 8, 6).
+
+### Verification
+
+`npm run typecheck` and `npm run build` green in `frontend/`; `typecheck`,
+`typecheck:tests` and all **40 tests** green in `relayer/`. Every number above
+was measured against the live chain, not inferred.
+
+### Blocked — needs the user
+
+- **`RELAYER_PRIVATE_KEY` repository secret.** The workflow cannot run without
+  it. Value is the contents of `../.secrets/relayer.key`; the exact steps are in
+  `docs/DEPLOY.md` §4.
+- **Pushing `.github/workflows/` needs the `workflow` OAuth scope** on the
+  token — a blocker this repo has hit before.
+- **Purchase 11 is still unjudged.** The first scheduled run after the secret is
+  set will settle it, and the reviewer's question is answerable then. The
+  relayer balance is ~0.001 ETH, which is thin for a live demo.
+
 ## 2026-09-16 — Session 20 — moved to Codespaces, restored the secrets, and closed task #20 for real
 
 The move off the Windows machine (Session 19's environment) meant `.secrets/`

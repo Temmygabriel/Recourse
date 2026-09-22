@@ -33,7 +33,9 @@ export default function CasePage() {
     async () => {
       const purchase = await fetchPurchase(id);
       if (purchase === null) return { purchase: null, settlement: null };
-      return { purchase, settlement: await fetchSettlement(id) };
+      // `stage` settles "has this settled?" without a log scan — see
+      // `fetchSettlement`.
+      return { purchase, settlement: await fetchSettlement(id, { stage: purchase.stage }) };
     },
     [id],
   );

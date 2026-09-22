@@ -1,0 +1,150 @@
+name: relayer
+
+# Keeps a verdict pipeline running without a laptop.
+#
+# WHY THIS EXISTS. The relayer is the only thing that can carry a GenLayer
+# finding onto Base — `settle()` is gated on the caller being the relayer
+# address, so the holder of that key has to be the one to run it. Until this
+# file, "running" meant a foreground `node` in somebody's terminal. That is not
+# a property of the system, it is a property of the terminal, and on 2026-09-16
+# it ended when the shell did: the process died at 17:43Z, purchase 11 was
+# disputed ~13 hours later, and every visitor to /verdict/11 for the next four
+# days was told the case was still being decided. Nothing was broken. Nothing
+# was running.
+#
+# A scheduled run is enough because the relayer is already built for it.
+# `tick()` enumerates every purchase `1..purchaseCount()` and skips the ones the
+# chain says are settled, so a run that starts after an outage picks up
+# everything the outage missed — there is no gap to fill by hand. State in
+# `.relayer-state.json` is what stops a re-run from paying GenLayer's evaluation
+# fee twice for the same dispute, and it is cached between runs below.
+#
+# CAVEAT, STATED PLAINLY: GitHub disables scheduled workflows on a repository
+# with no activity for 60 days, and a scheduled run can be delayed under load.
+# This is a durable place to run a testnet relayer, not an SLA.
+
+on:
+  schedule:
+    # Every 5 minutes. GitHub's documented minimum, and it may run late.
+    - cron: '*/5 * * * *'
+  # So a stuck dispute can be picked up on demand rather than waited on.
+  workflow_dispatch:
+
+# Never two relayers at once. They would share one state file and one nonce
+# ledger, and two ticks racing on the same dispute is the one way to pay for the
+# same evaluation twice.
+#
+# `cancel-in-progress: false` on purpose: a run that is mid-evaluation holds a
+# GenLayer transaction that cost money, and killing it buys nothing — the next
+# run resumes it from the state file anyway.
+concurrency:
+  group: relayer
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  relay:
+    name: relayer (one bounded run)
+    runs-on: ubuntu-latest
+    # The loop is capped below; this is only here so a hung `npm ci` cannot
+    # occupy a runner until the 6-hour default.
+    timeout-minutes: 12
+
+    defaults:
+      run:
+        working-directory: relayer
+
+    env:
+      # Public values, not secrets. Both addresses are already published in
+      # docs/DEPLOY.md and embedded in the deployed frontend bundle — the
+      # escrow address is a `NEXT_PUBLIC_*` build input, so it is readable in
+      # the site's own JavaScript.
+      BASE_RPC_URL: https://sepolia.base.org
+      ESCROW_ADDRESS: '0xD67C696CcA7e65bb2287097e06619F1c6D14De1c'
+      GENLAYER_CHAIN: studioDevnet
+      GENLAYER_CONTRACT_ADDRESS: '0xCc3117ebD2877AF3C66D36B38A4712afE37073f3'
+
+      # The only secret. A dedicated testnet key holding ~0.001 ETH of Base
+      # Sepolia gas; see docs/DEPLOY.md §4.
+      RELAYER_PRIVATE_KEY: ${{ secrets.RELAYER_PRIVATE_KEY }}
+
+      DRY_RUN: 'false'
+      POLL_INTERVAL_MS: '15000'
+      STATE_FILE: ./.relayer-state.json
+      LOG_LEVEL: info
+      MAX_PURCHASES_PER_TICK: '50'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 24 to match the `relayer` job in ci.yml — the sources are ESM with
+      # `.ts` specifiers and the build relies on recent Node behaviour.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: relayer/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # The state file is gitignored, so it exists only in the cache. The key is
+      # unique per run (a cache entry is immutable once written) and
+      # `restore-keys` pulls back the most recent one, which is the standard way
+      # to carry a mutable file forward.
+      #
+      # A miss is survivable rather than fatal: `tick()` re-reads every disputed
+      # purchase from the chain, so the worst case is one re-submitted
+      # evaluation, not a missed verdict.
+      - name: Restore relayer state
+        uses: actions/cache@v4
+        with:
+          path: relayer/.relayer-state.json
+          key: relayer-state-${{ github.run_id }}
+          restore-keys: |
+            relayer-state-
+
+      # Run the real loop for most of the window, then let it stop cleanly.
+      #
+      # Not `--once`: a single tick can submit an evaluation but cannot also
+      # wait for GenLayer's finality and settle it, so the whole point of a
+      # several-minute window is that one run can carry a dispute from
+      # "disputed" all the way to SETTLED.
+      #
+      # `timeout` sends SIGTERM, which the relayer handles — it finishes the
+      # tick in flight and exits 0. The `-k 30` is the backstop for a tick that
+      # will not finish; 124/137 mean the window simply ended, which is normal
+      # and not a failure.
+      - name: Relay
+        run: |
+          set +e
+          timeout -k 30 270 node dist/index.js
+          code=$?
+          case "$code" in
+            0)   echo "Relayer stopped cleanly." ;;
+            124|137)
+              echo "Run window elapsed; the next scheduled run continues from the state file."
+              exit 0
+              ;;
+          esac
+          exit "$code"
+
+      - name: State summary
+        if: always()
+        run: |
+          if [ -f .relayer-state.json ]; then
+            node -e "
+              const s = JSON.parse(require('fs').readFileSync('.relayer-state.json', 'utf8'));
+              const by = {};
+              for (const p of Object.values(s.purchases)) by[p.status] = (by[p.status] ?? 0) + 1;
+              console.log('updatedAt:', s.updatedAt);
+              console.log('statuses :', JSON.stringify(by));
+            "
+          else
+            echo "No state file yet — nothing has been handled."
+          fi

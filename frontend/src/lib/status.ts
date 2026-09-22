@@ -214,6 +214,62 @@ export const AWAITING_VERDICT_POLLS =
   'you do not need to reload it.';
 
 /**
+ * How long a dispute may be pending before the screen stops describing it as a
+ * normal wait.
+ *
+ * Thirty minutes is not a guess at how long GenLayer takes — it is placed well
+ * clear of it. A run of the relayer carries a dispute from "submitted" to
+ * "settled" in one pass (see `.github/workflows/relayer.yml`), and the schedule
+ * fires every five minutes, so a healthy case resolves in single-digit minutes.
+ * When the process behind it died on 2026-09-16 the true figure was four days.
+ * A threshold in the middle of that gap is what keeps this screen from crying
+ * wolf at a case that is merely slow, which would cost it the credibility it
+ * needs on the day something really is wrong.
+ */
+export const DISPUTE_LONG_WAIT_SECONDS = 30 * 60;
+
+/**
+ * The headline once a dispute has been pending past that threshold.
+ *
+ * It says the wait is unusual, not that anything is broken, because the screen
+ * cannot see the relayer — it can only see that no finding has landed. Naming a
+ * cause it cannot observe is the failure this whole screen exists to avoid.
+ */
+export const AWAITING_VERDICT_LONG_HEADLINE = 'This case has been waiting longer than usual';
+
+/**
+ * The explanation under the long-wait headline.
+ *
+ * Two things a reader needs at this point and cannot get anywhere else: that a
+ * dispute normally resolves in minutes, so this is not the normal shape of the
+ * wait; and that a long wait has not decided anything. The second is the one
+ * that matters — the natural reading of "long delay" is "something went wrong
+ * for me", and at this stage the money is still exactly where it was.
+ *
+ * It does not promise a resolution time. Nobody can, and a promise that turns
+ * out false is worse than no promise.
+ */
+export const AWAITING_VERDICT_LONG_NOTE =
+  'A dispute normally reaches a finding in minutes: GenLayer’s validators read the ' +
+  'frozen promise, the criteria and the delivered file, and a relayer carries their ' +
+  'answer onto Base in a separate step. That step has not happened for this case yet, ' +
+  'and it is past the point where a slow run explains it. Nothing has been decided ' +
+  'against either party — the price and the bond are still held by the escrow, and ' +
+  'the dispute is still open.';
+
+/**
+ * What happens next, in the long-wait state.
+ *
+ * Points at the one lever that exists rather than at the reader: the relayer runs
+ * on a schedule and a scheduled run can be delayed, so the honest statement is
+ * that this can still resolve on its own.
+ */
+export const AWAITING_VERDICT_LONG_NEXT =
+  'The relayer runs on a schedule, and a scheduled run can be delayed or miss. This can ' +
+  'still resolve without anyone doing anything, and the page will show the finding the ' +
+  'moment it lands.';
+
+/**
  * Shown on a settled-but-unjudged purchase, where "no verdict" is the correct
  * and final answer rather than a wait.
  */

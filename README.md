@@ -172,7 +172,7 @@ Honest about what is proven and what is not.
 |:--|:--|
 | Base escrow | **Deployed to Base Sepolia** at `0xD67C696CcA7e65bb2287097e06619F1c6D14De1c` (redeployed 2026-09-14). Compiles clean; **139/139 tests pass** (`forge test`). Runtime 19,014 B — 5,562 B under the EIP-170 limit. All seven immutables verified on-chain. |
 | GenLayer judgment contract | **Deployed to studio-dev (61997)** at `0xCc3117ebD2877AF3C66D36B38A4712afE37073f3` (redeployed 2026-09-14) — `FINALIZED` · `MAJORITY_AGREE`, 5 validators, 5 votes revealed, and a live `has_decision` call returns. This revision fetches the delivered artifact and re-checks its SHA-256 before reading it. |
-| Relayer | Written; logic tested without dependencies (40 tests). **Has now run against a live GenLayer and settled a real dispute** — see below. |
+| Relayer | Written; logic tested without dependencies (40 tests). **Has now run against a live GenLayer and settled a real dispute** — see below. Runs on a **GitHub Actions schedule** rather than in a terminal (`.github/workflows/relayer.yml`); see the note on liveness below. |
 | Frontend | Written; typechecks and builds (`next build`, 8 pages). CI builds it on every push; not yet hosted. |
 | Demo content on chain | **Reseeded 2026-09-14** — seven purchases, one in every stage, and the escrow's `totalHeld()` equals its USDC balance. |
 | Deployed end-to-end demo | **✅ Exercised on 2026-09-12** against the previous deployment. The delivery-URL rebuild changed the purchase struct, so that run no longer describes this code — **a re-run is outstanding.** |
@@ -197,6 +197,18 @@ a verdict produced by GenLayer's validators can be carried to Base and can move
 money, and the escrow's checks accept it. It is **not** a claim that the system
 is production-ready, and it is **not** a claim that the relayer is trustless —
 it is a trusted prototype component, and this is testnet-only.
+
+**A note on liveness, learned the hard way.** Between 2026-09-16 and 2026-09-21
+the relayer was not running: it had been started as a foreground process in a
+terminal and it died with that shell. A purchase disputed the next day was never
+shown to GenLayer, so it never got a verdict — and every screen in the app
+rendered that correctly and unhelpfully, as "the case is still being decided".
+Nothing was broken, which is the point: **every test suite, typecheck and build
+in this repository was green throughout, because the failure was in the
+deployment rather than in the code.** It is now on a schedule, and the waiting
+screen reports how long a dispute has actually been open so that a slow case and
+a dead relayer no longer look the same. The full account is in
+`docs/DEPLOY.md` §4 and `PROGRESS.md`.
 
 Two further limits worth stating plainly:
 

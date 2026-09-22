@@ -82,6 +82,44 @@ else in the decision *is* verified on-chain (see `docs/SECURITY.md`), but
 testnet-only." Do **not** describe the system as trustless. The build spec is
 explicit that overclaiming here is the failure mode to avoid.
 
+### ⚠️ A relayer in a terminal is not a deployment
+
+Found 2026-09-21, chasing a reviewer's report that `/verdict/11` had been "stuck
+far longer than the project's own docs describe".
+
+**The relayer process died at 2026-09-16T17:43:15Z, when its shell did.** It had
+been started as a foreground `node` in a terminal. Purchase 11 was delivered at
+`2026-09-18T06:33:20Z` and disputed at `2026-09-18T06:43:46Z` — both ~13 hours
+*after* the process was already gone. So GenLayer was never asked about it, no
+verdict ever existed, and for four days every visitor was told the case was
+still being decided.
+
+**Nothing was broken. Nothing was running.** The code was correct throughout:
+
+- `tick()` enumerates every purchase `1..purchaseCount()` and skips only those
+  the store marks `settled`/`failed`, so a restart picks up everything an outage
+  missed. There was no gap to fill by hand — nobody ever restarted it.
+- The main loop never bails on a throwing tick; it logged ~40 consecutive
+  `tick failed` lines (all `purchaseCount()` calls to `sepolia.base.org` →
+  `fetch failed`) and kept going. **A relayer that is failing loudly and one
+  that is running fine look identical from the outside**, because the only thing
+  either one writes is a verdict, and the failing one writes none.
+
+**The lesson that generalises:** the *liveness* of a component is not a property
+the repository can express. Every artifact here was green — the code, the tests,
+the typecheck, the build — and the product was still wrong for four days,
+because the failure was in the deployment, not in the code. **A process whose
+only observable output is "a verdict appears later" must be run somewhere that
+outlives a terminal.** It now runs on a GitHub Actions schedule
+(`.github/workflows/relayer.yml`); the reasoning is in `docs/DEPLOY.md` §4.
+
+**Diagnosing this class of bug.** The decisive evidence was
+`relayer/relayer-live.log` — a timestamped last line 37 hours before the dispute
+existed. **Check the process's own timestamps against the event's before
+reasoning about the code.** Two independent causes produced one symptom here
+(the dead process, and the `eth_getLogs` bug above), so ruling out either one
+alone would have been wrong.
+
 ---
 
 ## GenLayer Consensus v0.6 — the parts that change our code
@@ -485,14 +523,51 @@ present on chain but invisible in the UI is this bug, not the relayer.
 - The floor is `NEXT_PUBLIC_ESCROW_DEPLOY_BLOCK`, defaulting in code to the
   current escrow's deploy block (46820927). **It must move with
   `NEXT_PUBLIC_ESCROW_ADDRESS`** — the two describe one deployment.
-- `fetchSettlement` walks **newest-first** and stops at the first window that
-  hits, so the common case is one request.
+- `fetchSettlement` **asks the stage first, then scans.** This is the difference
+  between a page that paints and a page that looks broken, and it was added
+  2026-09-21 after measuring the worst case. The escrow sets `stage = SETTLED`
+  and emits `Settled` in *the same transaction*, so `stage !== SETTLED` proves
+  no such log exists and the scan can be skipped outright. Without it, an
+  unsettled purchase is the scan's worst case rather than its cheapest — there
+  is nothing to find, so it walks the escrow's entire history: **30 requests,
+  16.4 seconds**, paid on the first load of every disputed case, which is
+  precisely the screen a person stares at while they wait. With it, zero log
+  requests.
+- The scan advances **both directions at once**, one window each per round, and
+  takes the first hit. Neither single direction wins: newest-first is one
+  request for a fresh settlement but 22–27 windows (8–9.6s) for an old one,
+  while forward from the deploy block is 5–9 windows (1.5–2.9s) for an old one
+  but the full 31 for a fresh one. The escrow ages, so which is worse *changes
+  over the deployment's life* — the original newest-first walk became the slow
+  path for every settled purchase without a line of code changing. Concurrent
+  two-way is 1.7–4.3s for both, and each direction is issued with
+  `Promise.allSettled` so one refused window cannot abort a scan that is
+  guaranteed to succeed (the caller already proved a settlement exists).
+- `fetchSettlement` memoises **hits only**. A cached miss would pin a settled
+  purchase to "unjudged" for the life of the tab — the same silent-absence
+  failure, reintroduced by a cache.
+- `fetchDisputeOpened` answers "how long has this been open?" in **one window**
+  by using the *absence* of the log as an answer: found → its block carries the
+  timestamp, so the age is exact; not found in the newest 10,000 blocks
+  (~5 hours at Base's ~1.77s) → it opened before the window began, which is
+  itself conclusive for a 30-minute threshold, and the window's opening block
+  turns it into an honest floor. Its result is reported as `{ since, exact }` so
+  the UI can say "at least".
 - `fetchSettledOutcomes` scans **incrementally** from a cursor, because
   `Settled` is append-only: the first poll pays for the whole span, later polls
   ask only for new blocks. Its cursor is deliberately *not* advanced on a throw.
 - The mapping was verified against the live chain, not just typechecked:
   purchase 9 → `outcome=1 bps=3333 bitmap=6`, purchase 10 → `outcome=1 bps=3333
-  bitmap=4`, 9 windows, all six settlements found.
+  bitmap=4`, 9 windows, all six settlements found. The two-way rewrite was
+  re-checked the same way on 2026-09-21 and returns the identical outcomes
+  (`#6=1 #7=0 #8=2 #10=1`).
+- **A wrong event signature fails identically to a correct one with no
+  matches**: `getLogs` returns `[]` either way. So an ABI used for filtering has
+  to be proven against a log that exists before it is trusted. On 2026-09-21 the
+  newest window held *zero* `DisputeOpened` logs, which would have made "every
+  case reads as a long wait" look like a working feature; walking the escrow's
+  full life found 6 real disputes (purchases 11, 9, 10, 7, 8, 6) and proved the
+  decode.
 
 **The generalisable rule:** a `catch` that returns a *plausible empty value*
 converts an infrastructure error into a content claim. `null` here means "this

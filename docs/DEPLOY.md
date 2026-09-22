@@ -353,8 +353,17 @@ DRY_RUN=true node --env-file=.env dist/index.js
 
 **Start with `DRY_RUN=true`.** It signs and simulates every decision but never
 broadcasts, so it exercises the whole pipeline — including the escrow's own
-signature recovery — without moving money. Run at least one full dispute
-through it before turning `DRY_RUN` off.
+signature recovery — without settling anything on Base.
+
+⚠️ **It is not free.** `DRY_RUN` gates step 7 only. Step 3 — submitting the
+evidence package to GenLayer — is the one step that costs a fee, and it runs
+either way. A dry run therefore spends a real evaluation fee on a dispute it
+will not settle; it saves you the Base settlement, not the judgment. The
+previous wording here said "without moving money", which is true of Base and
+false of GenLayer, and it is the difference between a free rehearsal and a
+rehearsal you pay for.
+
+Run at least one full dispute through it before turning `DRY_RUN` off.
 
 The relayer checks at startup that its configured `GENLAYER_CHAIN` agrees with
 the escrow's immutable `sourceChainId`, and refuses to run if they disagree.
@@ -363,6 +372,47 @@ rejects.
 
 State lives in `.relayer-state.json` (gitignored) so a restart resumes rather
 than re-spending fees.
+
+### Keeping it running — GitHub Actions
+
+**A foreground `node` is not a deployment.** That is not a hypothetical: the
+process above was started in a terminal, and on **2026-09-16 it died at
+17:43Z** when the shell did. Purchase 11 was disputed ~13 hours later, so
+GenLayer was never asked about it, and every visitor to `/verdict/11` for the
+next four days was told the case was still being decided. Nothing was broken.
+Nothing was running.
+
+`.github/workflows/relayer.yml` runs it on a schedule instead:
+
+| | |
+|---|---|
+| Trigger | `cron '*/5 * * * *'` (GitHub's minimum; runs may be delayed), plus **Run workflow** for on-demand |
+| Window | One bounded run of ~4.5 min, then a clean `SIGTERM` |
+| Concurrency | `group: relayer` — never two at once, since they would share one state file and one nonce ledger |
+| State | `.relayer-state.json` carried between runs in the Actions cache |
+
+A single tick can submit an evaluation but cannot also wait for GenLayer's
+finality and settle it, which is why the window is minutes rather than one
+tick. Catch-up is free: `tick()` enumerates every purchase `1..purchaseCount()`
+and skips the ones the chain already says are settled, so a run that starts
+after an outage picks up everything the outage missed.
+
+**One-time setup.** The workflow needs the relayer key as a repository secret:
+
+```
+Settings → Secrets and variables → Actions → New repository secret
+  Name:  RELAYER_PRIVATE_KEY
+  Value: the contents of ../.secrets/relayer.key
+```
+
+Note the two spellings: the `.env` file uses `RELAYER_PRIVATE_KEY_FILE` (a
+path), while CI uses `RELAYER_PRIVATE_KEY` (the key itself). `config.ts` accepts
+either, and CI has no checkout of `../.secrets/`, which is why it uses the
+inline form.
+
+Two caveats, stated plainly. GitHub **disables scheduled workflows after 60
+days of repository inactivity**, and a scheduled run can be delayed under load.
+This is a durable place to run a testnet relayer, not an SLA.
 
 ---
 

@@ -57,7 +57,10 @@ export default function VerdictPage() {
   const read = useCallback(async () => {
     const purchase = await fetchPurchase(id);
     if (purchase === null) return { purchase: null, settlement: null };
-    return { purchase, settlement: await fetchSettlement(id) };
+    // The stage travels with the request rather than being re-read inside
+    // `fetchSettlement`: the escrow sets it in the same transaction that emits
+    // `Settled`, so it answers "has this settled?" without a log scan.
+    return { purchase, settlement: await fetchSettlement(id, { stage: purchase.stage }) };
   }, [id]);
 
   const { data, error, loading } = useAsync(read, [id], { pollMs: 20_000 });
